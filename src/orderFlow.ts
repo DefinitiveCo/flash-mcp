@@ -131,7 +131,7 @@ async function placeSvmOrder(
   // 2. Delegate authority — prefer the sponsored tx when offered.
   let svmSponsoredDelegateTx: string | undefined;
   if (svm.sponsoredDelegateTx) {
-    svmSponsoredDelegateTx = signer.signSponsoredTxBase64(svm.sponsoredDelegateTx);
+    svmSponsoredDelegateTx = await signer.signSponsoredTxBase64(svm.sponsoredDelegateTx);
     steps.push("Co-signed sponsored delegate tx");
   } else if (svm.delegateIx) {
     const { signature } = await signer.sendInstructions([svm.delegateIx], "delegate");
