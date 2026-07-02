@@ -67,9 +67,14 @@ async function keychainSet(account: CredentialKind, value: string): Promise<void
     account,
     "-w",
     value,
-    "-U",
+    "-U", // update if it already exists
+    // Trust the `security` CLI to read this item without a GUI prompt. We always
+    // read via `security find-generic-password`, so this lets the MCP server read
+    // credentials non-interactively (e.g. when spawned by the MCP client). Do NOT
+    // use `-T ""` here — an empty trust list makes every read prompt/deny, which
+    // silently breaks reads from spawned processes.
     "-T",
-    "", // restrict ACL — only the security tool / explicit prompts can read it
+    "/usr/bin/security",
     "-D",
     "Definitive Flash MCP credential",
   ]);

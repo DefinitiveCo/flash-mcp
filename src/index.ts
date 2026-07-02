@@ -200,29 +200,36 @@ registerTool(
     }
 
     lines.push(
-      "**Step 2 — Add a funder wallet** to place trades.",
-      "🔒 A private key should NOT be pasted into chat (it would pass through the model and the",
-      "transcript). Store it securely from your own terminal — the key is typed into a hidden local",
-      "prompt and written straight to the Keychain:",
+      "",
+      "The API key is all you need to **quote** prices. Everything below is **optional** — add it only when you want to.",
+      "",
+      "**Step 2 (optional) — Add a funder wallet** — only needed to actually *place* trades.",
+      "🔒 Don't paste a private key into chat (it would pass through the model and transcript). Store it",
+      "securely from your own terminal; it's typed into a hidden prompt and written straight to the Keychain:",
       "```",
       "node " + process.argv[1] + " set-key evm    # or: svm",
       "```",
       "_(If installed on PATH, just `flash-mcp set-key evm`.)_",
-      evmAddr ? `✅ EVM wallet: ${evmAddr}` : "• EVM wallet: not set",
-      svmAddr ? `✅ Solana wallet: ${svmAddr}` : "• Solana wallet: not set",
+      evmAddr ? `✅ EVM wallet: ${evmAddr}` : "• EVM wallet: not set (optional)",
+      svmAddr ? `✅ Solana wallet: ${svmAddr}` : "• Solana wallet: not set (optional)",
     );
 
     const rpcCfg = getConfig().rpc ?? {};
     const rpcChains = Object.keys(rpcCfg);
     lines.push(
-      "**Step 3 (recommended) — Set a custom RPC.** The public defaults are rate-limited.",
+      "**Step 3 (optional) — Set a custom RPC** — recommended if you trade a lot, since public defaults are rate-limited.",
       rpcChains.length
         ? `✅ Custom RPC set for: ${rpcChains.join(", ")}`
-        : "• Call `flash_setup` with `rpc: { \"base\": \"https://…\" }` to add your own (e.g. Alchemy/Infura).",
+        : "• Custom RPC: not set (optional — call `flash_setup` with `rpc: { \"base\": \"https://…\" }`)",
     );
 
-    if (apiSource !== "none" && (evmAddr || svmAddr)) {
-      lines.push("", "🎉 You're set up. Try `flash_quote` to price a trade, then `flash_submit_order` to execute.");
+    if (apiSource !== "none") {
+      lines.push(
+        "",
+        evmAddr || svmAddr
+          ? "🎉 You're fully set up. Try `flash_quote` to price a trade, then `flash_submit_order` to execute."
+          : "🎉 Ready to quote — try `flash_quote`. Add a wallet (Step 2) whenever you want to place real trades.",
+      );
     }
     return result(lines.join("\n"));
   },
