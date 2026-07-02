@@ -1,0 +1,85 @@
+# Definitive Flash MCP
+
+An [MCP](https://modelcontextprotocol.io) server that lets traders quote, execute, and manage
+trades on the [Definitive Flash API](https://flash.definitive.fi/docs) directly from any MCP
+client (Claude Code, Claude Desktop, Cursor, etc.).
+
+Flash routes across 200+ liquidity sources on 12 chains and returns a signable payload. This
+server handles the full flow for you: **quote → wrap/approve → sign → submit → poll for fill**,
+for both EVM wallets and Solana.
+
+## What it does
+
+| Tool | Purpose |
+|------|---------|
+| `flash_setup` | Connect your account: get a link to generate a Flash API key, then store the key and your funder wallet(s). |
+| `flash_status` | Show what's configured (API key, wallets) and the supported chains. |
+| `flash_quote` | Price a trade without executing. No wallet required. |
+| `flash_submit_order` | Execute a trade end to end (market, limit, twap, stop, take-profit, bracket). Spends real funds. |
+| `flash_get_order` | Status, fills, and detail for one order. |
+| `flash_list_orders` | Recent orders for a funder wallet. |
+| `flash_cancel_order` | Cancel a resting order. |
+
+## Install
+
+```bash
+cd flash-mcp
+bun install      # or: npm install
+bun run build    # compiles to dist/
+```
+
+## Configure your MCP client
+
+Point your client at the built server. For Claude Code:
+
+```bash
+claude mcp add definitive-flash -- node /Users/carlosreyes/dev/definitive/flash-mcp/dist/index.js
+```
+
+Or add it to your client's config JSON:
+
+```json
+{
+  "mcpServers": {
+    "definitive-flash": {
+      "command": "node",
+      "args": ["/Users/carlosreyes/dev/definitive/flash-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+## First-run setup
+
+1. Run the `flash_setup` tool with no arguments. It links you to your Definitive account and
+   tells you how to generate a key: **API Keys → Create a new key → Access Type = Flash →
+   Generate New Key**. Pass your `organization` slug to get a direct deeplink.
+2. Run `flash_setup` again with the key: `{ "apiKey": "dpka_…" }`.
+3. Add a funder wallet to trade: `{ "evmPrivateKey": "0x…" }` and/or `{ "svmPrivateKey": "…" }`.
+
+That's it — `flash_quote` to price, `flash_submit_order` to trade.
+
+## Credential storage
+
+Secrets are stored in the **macOS Keychain** (service `definitive-flash-mcp`), encrypted at rest
+by the OS — never written to a dotfile in plaintext. On non-macOS hosts, or to inject credentials
+without calling `flash_setup`, set environment variables (these take precedence over the Keychain):
+
+```
+DEFINITIVE_API_KEY            your Flash API key
+DEFINITIVE_PRIVATE_KEY        EVM funder wallet private key (0x hex)
+DEFINITIVE_SVM_PRIVATE_KEY    Solana funder wallet secret (base58 or JSON byte array)
+```
+
+RPC endpoints default to public nodes per chain. Override with `DEFINITIVE_RPC_<CHAIN>`
+(e.g. `DEFINITIVE_RPC_BASE=https://…`) or the per-call `rpcUrl` argument.
+
+## Notes
+
+- **`flash_submit_order` spends real funds.** It quotes fresh, signs with your stored key, and
+  submits. For market orders it polls until the order reaches a terminal status.
+- EVM trades may send a one-time ERC-20 approve (and a wrap tx for native-asset trades) before
+  signing — your wallet needs a little gas for those.
+- `qty` is the amount being **spent**: in `contraAsset` units for buys, `targetAsset` units for sells.
+- Supported chains: ethereum, optimism, bsc, polygon, base, arbitrum, avalanche, blast, hyperevm,
+  plasma, monad, solana.
