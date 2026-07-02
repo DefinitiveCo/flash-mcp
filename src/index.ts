@@ -19,6 +19,7 @@ import { credentialSource, getCredential, maskSecret, setCredential } from "./cr
 import { FlashApiError } from "./flashClient.js";
 import { orderDetail, orderLine, quoteSummary, result } from "./format.js";
 import { cancelOrder, placeOrder } from "./orderFlow.js";
+import { runCli } from "./cli.js";
 import { evmAddressFromPrivateKey } from "./signing/evm.js";
 import { svmAddressFromSecret } from "./signing/svm.js";
 import type { FlashOrderStatus, OrderSide, OrderType, PriceTrigger } from "./types.js";
@@ -115,8 +116,19 @@ registerTool(
       "macOS Keychain, never in plaintext.",
     inputSchema: {
       apiKey: z.string().optional().describe("Definitive Flash API key (starts with dpka_)"),
-      evmPrivateKey: z.string().optional().describe("EVM funder wallet private key (0x hex, 32 bytes)"),
-      svmPrivateKey: z.string().optional().describe("Solana funder wallet secret (base58 or JSON byte array)"),
+      evmPrivateKey: z
+        .string()
+        .optional()
+        .describe(
+          "DISCOURAGED — do not ask the user to paste a private key into chat; it would flow through " +
+            "the model and transcript. Prefer the `flash-mcp set-key evm` CLI. Only accepted here as a fallback.",
+        ),
+      svmPrivateKey: z
+        .string()
+        .optional()
+        .describe(
+          "DISCOURAGED — see evmPrivateKey. Prefer the `flash-mcp set-key svm` CLI instead of pasting into chat.",
+        ),
       organization: z
         .string()
         .optional()
@@ -188,9 +200,16 @@ registerTool(
     }
 
     lines.push(
-      "**Step 2 — Add a funder wallet** to place trades:",
-      evmAddr ? `✅ EVM wallet: ${evmAddr}` : "• EVM: call `flash_setup` with `evmPrivateKey` to trade on EVM chains.",
-      svmAddr ? `✅ Solana wallet: ${svmAddr}` : "• Solana: call `flash_setup` with `svmPrivateKey` to trade on Solana.",
+      "**Step 2 — Add a funder wallet** to place trades.",
+      "🔒 A private key should NOT be pasted into chat (it would pass through the model and the",
+      "transcript). Store it securely from your own terminal — the key is typed into a hidden local",
+      "prompt and written straight to the Keychain:",
+      "```",
+      "node " + process.argv[1] + " set-key evm    # or: svm",
+      "```",
+      "_(If installed on PATH, just `flash-mcp set-key evm`.)_",
+      evmAddr ? `✅ EVM wallet: ${evmAddr}` : "• EVM wallet: not set",
+      svmAddr ? `✅ Solana wallet: ${svmAddr}` : "• Solana wallet: not set",
     );
 
     const rpcCfg = getConfig().rpc ?? {};
@@ -388,6 +407,18 @@ registerTool(
 // boot
 // ---------------------------------------------------------------------------
 async function main() {
+  // If invoked with a CLI subcommand (e.g. `flash-mcp set-key evm`), handle it
+  // out-of-band and exit — do NOT start the server on stdio.
+  if (process.argv.length > 2) {
+    try {
+      await runCli(process.argv.slice(2));
+    } catch (err) {
+      console.error(`❌ ${describeError(err)}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // stderr so it doesn't corrupt the stdio JSON-RPC stream.

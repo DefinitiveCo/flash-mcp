@@ -49,6 +49,23 @@ Or add it to your client's config JSON:
 }
 ```
 
+## Secure credential entry (recommended)
+
+**Never paste a wallet private key into the chat** — it would pass through the model and the
+conversation transcript. Instead, store secrets from your own terminal via the built-in CLI. The
+key is typed into a hidden prompt (no echo) and written straight to the Keychain:
+
+```bash
+flash-mcp set-key evm     # or: svm, api   (prompts hidden, stores in Keychain)
+flash-mcp set-key api
+flash-mcp set-rpc base https://your-rpc
+flash-mcp set-org 5VYFCW7M
+flash-mcp status          # show what's configured
+flash-mcp remove-key evm
+```
+
+If it isn't on your PATH, run it via node: `node /path/to/flash-mcp/dist/index.js set-key evm`.
+
 ## First-run setup
 
 1. Run the `flash_setup` tool with no arguments. It links you to your Definitive account and
