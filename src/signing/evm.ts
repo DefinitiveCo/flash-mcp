@@ -61,9 +61,17 @@ export class EvmSigner {
     const td = JSON.parse(typedDataString);
     // viem rejects the EIP712Domain entry inside `types`; strip it.
     const { EIP712Domain: _ignored, ...types } = td.types ?? {};
+    // The quote serializes domain.chainId as a string, but viem only includes
+    // chainId in the EIP-712 domain when `typeof chainId === "number"`. A string
+    // silently drops chainId from the domain hash, so the signature never matches
+    // the on-chain verifier. Coerce it back to a number.
+    const domain = { ...td.domain };
+    if (domain.chainId !== undefined && domain.chainId !== null) {
+      domain.chainId = Number(domain.chainId);
+    }
     return this.wallet.signTypedData({
       account: this.account,
-      domain: td.domain,
+      domain,
       types,
       primaryType: td.primaryType,
       message: td.message,
