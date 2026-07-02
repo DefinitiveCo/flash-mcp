@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 import { CHAIN_IDS } from "./chains.js";
-import { CONFIG_FILE_PATH, getConfig, setRpcOverrides } from "./config.js";
+import { CONFIG_FILE_PATH, getConfig, getOrganization, setOrganization, setRpcOverrides } from "./config.js";
 import {
   funderAddressFor,
   requireClient,
@@ -133,6 +133,11 @@ registerTool(
   async (args) => {
     const stored: string[] = [];
 
+    if (args.organization) {
+      setOrganization(args.organization as string);
+      stored.push(`organization (${args.organization})`);
+    }
+
     if (args.rpc && Object.keys(args.rpc).length > 0) {
       setRpcOverrides(args.rpc as Record<string, string>);
       const set = Object.entries(args.rpc as Record<string, string>)
@@ -167,13 +172,14 @@ registerTool(
     if (stored.length) lines.push(`✅ Stored: ${stored.join(", ")}.`, "");
 
     if (apiSource === "none") {
+      const org = (args.organization as string | undefined) ?? getOrganization();
       lines.push(
         "**Step 1 — Generate a Flash API key.**",
-        `Open your Definitive account: ${deeplink(args.organization)}`,
-        "Go to **API Keys → Create a new key**, set **Access Type = Flash**, and click **Generate New Key**.",
-        args.organization
+        `Open your Definitive API keys page: ${deeplink(org)}`,
+        "Click **Create a new key**, set **Access Type = Flash**, and click **Generate New Key**.",
+        org
           ? ""
-          : "_Tip: pass your `organization` slug to `flash_setup` to get a direct deeplink to that page._",
+          : "_Tip: pass your `organization` slug to `flash_setup` (e.g. \"5VYFCW7M\") to deeplink straight to your org's keys page._",
         "Then call `flash_setup` again with `apiKey: \"dpka_…\"`.",
         "",
       );
