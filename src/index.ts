@@ -7,6 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 import { CHAIN_IDS } from "./chains.js";
+import { CONFIG_FILE_PATH, getConfig, setRpcOverrides } from "./config.js";
 import {
   funderAddressFor,
   requireClient,
@@ -120,10 +121,25 @@ registerTool(
         .string()
         .optional()
         .describe("Your Definitive organization slug, to build a direct deeplink to the API-keys page"),
+      rpc: z
+        .record(chainEnum, z.string())
+        .optional()
+        .describe(
+          "Optional custom RPC URLs per chain, e.g. { \"base\": \"https://…\" }. Recommended — the " +
+            "public defaults are rate-limited. Pass an empty string to clear a chain's override.",
+        ),
     },
   },
   async (args) => {
     const stored: string[] = [];
+
+    if (args.rpc && Object.keys(args.rpc).length > 0) {
+      setRpcOverrides(args.rpc as Record<string, string>);
+      const set = Object.entries(args.rpc as Record<string, string>)
+        .filter(([, u]) => u && u.trim())
+        .map(([c]) => c);
+      if (set.length) stored.push(`RPC for ${set.join(", ")}`);
+    }
 
     if (args.apiKey) {
       if (!args.apiKey.startsWith("dpka_")) {
@@ -171,6 +187,15 @@ registerTool(
       svmAddr ? `✅ Solana wallet: ${svmAddr}` : "• Solana: call `flash_setup` with `svmPrivateKey` to trade on Solana.",
     );
 
+    const rpcCfg = getConfig().rpc ?? {};
+    const rpcChains = Object.keys(rpcCfg);
+    lines.push(
+      "**Step 3 (recommended) — Set a custom RPC.** The public defaults are rate-limited.",
+      rpcChains.length
+        ? `✅ Custom RPC set for: ${rpcChains.join(", ")}`
+        : "• Call `flash_setup` with `rpc: { \"base\": \"https://…\" }` to add your own (e.g. Alchemy/Infura).",
+    );
+
     if (apiSource !== "none" && (evmAddr || svmAddr)) {
       lines.push("", "🎉 You're set up. Try `flash_quote` to price a trade, then `flash_submit_order` to execute.");
     }
@@ -198,8 +223,15 @@ registerTool(
       apiKey ? `- API key: ${maskSecret(apiKey)} (source: ${apiSource})` : "- API key: ❌ not set — run `flash_setup`",
       evmAddr ? `- EVM funder wallet: ${evmAddr}` : "- EVM funder wallet: ❌ not set",
       svmAddr ? `- Solana funder wallet: ${svmAddr}` : "- Solana funder wallet: ❌ not set",
-      `- Supported chains: ${CHAIN_IDS.join(", ")}`,
     ];
+    const rpcCfg = getConfig().rpc ?? {};
+    const rpcChains = Object.keys(rpcCfg);
+    lines.push(
+      rpcChains.length
+        ? `- Custom RPC: ${rpcChains.map((c) => `${c}`).join(", ")} (config: ${CONFIG_FILE_PATH})`
+        : "- Custom RPC: none (using public defaults; set via `flash_setup`)",
+      `- Supported chains: ${CHAIN_IDS.join(", ")}`,
+    );
     return result(lines.join("\n"));
   },
 );

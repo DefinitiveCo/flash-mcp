@@ -56,6 +56,8 @@ Or add it to your client's config JSON:
    Generate New Key**. Pass your `organization` slug to get a direct deeplink.
 2. Run `flash_setup` again with the key: `{ "apiKey": "dpka_…" }`.
 3. Add a funder wallet to trade: `{ "evmPrivateKey": "0x…" }` and/or `{ "svmPrivateKey": "…" }`.
+4. (Recommended) Set a custom RPC — the public defaults are rate-limited:
+   `{ "rpc": { "base": "https://…" } }`. Pass an empty string to clear one.
 
 That's it — `flash_quote` to price, `flash_submit_order` to trade.
 
@@ -71,8 +73,11 @@ DEFINITIVE_PRIVATE_KEY        EVM funder wallet private key (0x hex)
 DEFINITIVE_SVM_PRIVATE_KEY    Solana funder wallet secret (base58 or JSON byte array)
 ```
 
-RPC endpoints default to public nodes per chain. Override with `DEFINITIVE_RPC_<CHAIN>`
-(e.g. `DEFINITIVE_RPC_BASE=https://…`) or the per-call `rpcUrl` argument.
+RPC endpoints default to public nodes per chain (rate-limited). Set your own the easy way via
+`flash_setup` with `{ "rpc": { "base": "https://…" } }` — persisted to
+`~/.config/definitive-flash-mcp/config.json` (non-secret, hand-editable). Precedence, highest
+first: per-call `rpcUrl` argument → `DEFINITIVE_RPC_<CHAIN>` env var → `flash_setup` config →
+public default.
 
 ## Notes
 

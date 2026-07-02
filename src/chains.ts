@@ -5,6 +5,8 @@
 // wait for their receipts; signing the order itself reads the chainId straight
 // from the quote's EIP-712 domain, so the RPC is only used for on-chain sends.
 
+import { getRpcOverride } from "./config.js";
+
 export type ChainKind = "evm" | "svm";
 
 export interface ChainInfo {
@@ -48,12 +50,15 @@ export function getChain(id: string): ChainInfo {
  * Resolve the RPC URL to use for a chain. Precedence:
  *   1. explicit override (per-call rpcUrl argument)
  *   2. DEFINITIVE_RPC_<CHAIN> env var (e.g. DEFINITIVE_RPC_BASE)
- *   3. the chain's default public RPC
+ *   3. RPC set via `flash_setup` (persisted config file)
+ *   4. the chain's default public RPC
  */
 export function resolveRpc(chainId: string, override?: string): string {
   if (override) return override;
   const envKey = `DEFINITIVE_RPC_${chainId.toUpperCase()}`;
   const fromEnv = process.env[envKey];
   if (fromEnv) return fromEnv;
+  const fromConfig = getRpcOverride(chainId);
+  if (fromConfig) return fromConfig;
   return getChain(chainId).defaultRpc;
 }
