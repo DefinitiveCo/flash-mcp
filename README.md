@@ -22,31 +22,76 @@ for both EVM wallets and Solana.
 
 ## Install
 
-```bash
-cd flash-mcp
-bun install      # or: npm install
-bun run build    # compiles to dist/
-```
+The server is published to npm as
+[`@definitive-fi/flash-mcp`](https://www.npmjs.com/package/@definitive-fi/flash-mcp) — no clone
+or build needed. Pick your client:
 
-## Configure your MCP client
-
-Point your client at the built server. For Claude Code:
+### Claude Code
 
 ```bash
-claude mcp add definitive-flash -- node /Users/carlosreyes/dev/definitive/flash-mcp/dist/index.js
+claude mcp add definitive-flash -- npx -y @definitive-fi/flash-mcp
 ```
 
-Or add it to your client's config JSON:
+Or install the plugin, which bundles the server plus a trading-workflow skill:
+
+```
+/plugin marketplace add cstoneham/flash-mcp
+/plugin install definitive-flash@flash-mcp
+```
+
+### Cursor
+
+[![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=definitive-flash&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBkZWZpbml0aXZlLWZpL2ZsYXNoLW1jcCJdfQ%3D%3D)
+
+Or add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per-project):
 
 ```json
 {
   "mcpServers": {
     "definitive-flash": {
-      "command": "node",
-      "args": ["/Users/carlosreyes/dev/definitive/flash-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@definitive-fi/flash-mcp"]
     }
   }
 }
+```
+
+### Codex
+
+```bash
+codex mcp add definitive-flash -- npx -y @definitive-fi/flash-mcp
+```
+
+Or add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.definitive-flash]
+command = "npx"
+args = ["-y", "@definitive-fi/flash-mcp"]
+```
+
+### Claude Desktop / other clients
+
+Add the same stdio server to the client's config JSON:
+
+```json
+{
+  "mcpServers": {
+    "definitive-flash": {
+      "command": "npx",
+      "args": ["-y", "@definitive-fi/flash-mcp"]
+    }
+  }
+}
+```
+
+### From source (development)
+
+```bash
+cd flash-mcp
+bun install      # or: npm install
+bun run build    # compiles to dist/
+claude mcp add definitive-flash -- node "$PWD/dist/index.js"
 ```
 
 ## Secure credential entry (recommended)
@@ -64,7 +109,7 @@ flash-mcp status          # show what's configured
 flash-mcp remove-key evm
 ```
 
-If it isn't on your PATH, run it via node: `node /path/to/flash-mcp/dist/index.js set-key evm`.
+If it isn't on your PATH, run it via npx: `npx -y @definitive-fi/flash-mcp set-key evm`.
 
 ## First-run setup
 

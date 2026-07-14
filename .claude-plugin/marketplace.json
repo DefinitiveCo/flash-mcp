@@ -1,0 +1,18 @@
+{
+  "name": "flash-mcp",
+  "owner": {
+    "name": "Definitive"
+  },
+  "description": "Definitive Flash trading tools for Claude Code",
+  "plugins": [
+    {
+      "name": "definitive-flash",
+      "source": "./",
+      "description": "Trade on the Definitive Flash API: quote, execute, and manage orders across 12 chains (EVM + Solana).",
+      "version": "0.1.0",
+      "author": { "name": "Definitive" },
+      "homepage": "https://flash.definitive.fi/docs",
+      "repository": "https://github.com/cstoneham/flash-mcp"
+    }
+  ]
+}
