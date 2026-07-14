@@ -15,6 +15,7 @@ for both EVM wallets and Solana.
 | `flash_setup` | Connect your account: get a link to generate a Flash API key, then store the key and your funder wallet(s). |
 | `flash_status` | Show what's configured (API key, wallets) and the supported chains. |
 | `flash_quote` | Price a trade without executing. No wallet required. |
+| `flash_balances` | Native + token balances for any wallet, via the built-in per-chain RPCs. Read-only. |
 | `flash_submit_order` | Execute a trade end to end (market, limit, twap, stop, take-profit, bracket). Spends real funds. |
 | `flash_get_order` | Status, fills, and detail for one order. |
 | `flash_list_orders` | Recent orders for a funder wallet. |

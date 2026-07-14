@@ -6,7 +6,8 @@ description: Workflow and safety rails for trading on the Definitive Flash API v
 # Trading on Definitive Flash
 
 The `definitive-flash` MCP server exposes: `flash_setup`, `flash_status`, `flash_quote`,
-`flash_submit_order`, `flash_get_order`, `flash_list_orders`, `flash_cancel_order`.
+`flash_balances`, `flash_submit_order`, `flash_get_order`, `flash_list_orders`,
+`flash_cancel_order`.
 
 ## Safety rails (non-negotiable)
 
@@ -38,6 +39,11 @@ The `definitive-flash` MCP server exposes: `flash_setup`, `flash_status`, `flash
 ## Quoting and ordering
 
 - `flash_quote` needs no wallet — use it freely to price trades and answer "what would I get" questions.
+- `flash_balances` answers "what do I hold" — never look up RPC endpoints yourself or curl a
+  node; it uses the built-in per-chain RPCs. Defaults to the funder wallet. On EVM chains pass
+  the ERC-20 addresses you care about; on Solana it lists all SPL holdings by default.
+- Check `flash_balances` before submitting an order when there's any doubt the wallet can
+  cover the spend plus gas.
 - Assets are **addresses**, not symbols. If the user gives a symbol, resolve the address on the
   target chain and confirm it with them before quoting — a wrong address trades the wrong token.
 - `qty` is the amount being **spent**: `contraAsset` units for buys, `targetAsset` units for sells.

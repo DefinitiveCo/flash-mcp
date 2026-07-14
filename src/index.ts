@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+import { fetchBalances } from "./balances.js";
 import { CHAIN_IDS } from "./chains.js";
 import { CONFIG_FILE_PATH, getConfig, setOrganization, setRpcOverrides } from "./config.js";
 import {
@@ -285,6 +286,59 @@ registerTool(
     const funder = await funderAddressFor(req.targetChain);
     const quote = await client.quote({ ...req, ...(funder ? { funderAddress: funder } : {}) });
     return result(quoteSummary(quote), quote);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// flash_balances — read-only wallet balances over the built-in RPCs
+// ---------------------------------------------------------------------------
+registerTool(
+  "flash_balances",
+  {
+    title: "Get wallet balances",
+    description:
+      "Fetch native and token balances for a wallet, using the built-in per-chain public RPCs " +
+      "(or configured overrides) — no external RPC lookup needed. Defaults to the configured " +
+      "funder wallet. Read-only; works without an API key. On Solana, omitting `tokens` lists " +
+      "every SPL token the wallet holds; on EVM chains, pass the ERC-20 addresses you want " +
+      "(only the native balance is returned otherwise).",
+    inputSchema: {
+      chain: chainEnum,
+      address: z
+        .string()
+        .optional()
+        .describe("Wallet address (defaults to the configured funder wallet for this chain)"),
+      tokens: z
+        .array(z.string())
+        .optional()
+        .describe("Token addresses (EVM) or mints (Solana) to include"),
+      rpcUrl: z.string().optional().describe("Override the RPC endpoint for this call"),
+    },
+  },
+  async (args) => {
+    const address = args.address ?? (await funderAddressFor(args.chain));
+    if (!address) {
+      throw new SetupError(
+        `No address given and no funder wallet configured for ${args.chain}. Pass an address, or add a wallet via flash_setup.`,
+      );
+    }
+    const balances = await fetchBalances(args.chain, address, args.tokens, args.rpcUrl);
+    // Busy wallets can hold hundreds of (mostly spam) SPL mints; don't flood the
+    // conversation — and only append raw JSON when it stays small.
+    const MAX_LISTED = 100;
+    const shown = balances.slice(0, MAX_LISTED);
+    const lines = [
+      `**Balances — \`${address}\` on ${args.chain}**`,
+      ...shown.map(
+        (b) => `- ${b.balance} ${b.symbol}${b.token === "native" ? "" : ` (\`${b.token}\`)`}`,
+      ),
+    ];
+    if (balances.length > shown.length) {
+      lines.push(
+        `- …and ${balances.length - shown.length} more tokens — pass \`tokens\` to query specific mints`,
+      );
+    }
+    return result(lines.join("\n"), balances.length <= 25 ? balances : undefined);
   },
 );
 
