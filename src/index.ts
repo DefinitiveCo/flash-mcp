@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 import { CHAIN_IDS } from "./chains.js";
-import { CONFIG_FILE_PATH, getConfig, getOrganization, setOrganization, setRpcOverrides } from "./config.js";
+import { CONFIG_FILE_PATH, getConfig, setOrganization, setRpcOverrides } from "./config.js";
 import {
   funderAddressFor,
   requireClient,
@@ -24,13 +24,9 @@ import { evmAddressFromPrivateKey } from "./signing/evm.js";
 import { svmAddressFromSecret } from "./signing/svm.js";
 import type { FlashOrderStatus, OrderSide, OrderType, PriceTrigger } from "./types.js";
 
-const ACCOUNT_URL = "https://app.definitive.fi/account";
-
-function deeplink(organization?: string): string {
-  return organization
-    ? `https://app.definitive.fi/account/organization@${organization}`
-    : ACCOUNT_URL;
-}
+// Routed modal in the Definitive app that walks the user through generating a
+// Flash API key (one-click generate + copy). Uses the org they're logged into.
+const MCP_SETUP_URL = "https://app.definitive.fi/account/organization/mcp-setup";
 
 // ----- shared zod fragments for trade params -----
 const chainEnum = z.enum(CHAIN_IDS as [string, ...string[]]);
@@ -132,7 +128,10 @@ registerTool(
       organization: z
         .string()
         .optional()
-        .describe("Your Definitive organization slug, to build a direct deeplink to the API-keys page"),
+        .describe(
+          "Your Definitive organization slug (optional). Stored for reference; the setup page uses " +
+            "whichever organization you're logged into, so this is no longer needed to get an API key.",
+        ),
       rpc: z
         .record(chainEnum, z.string())
         .optional()
@@ -184,14 +183,10 @@ registerTool(
     if (stored.length) lines.push(`✅ Stored: ${stored.join(", ")}.`, "");
 
     if (apiSource === "none") {
-      const org = (args.organization as string | undefined) ?? getOrganization();
       lines.push(
-        "**Step 1 — Generate a Flash API key.**",
-        `Open your Definitive API keys page: ${deeplink(org)}`,
-        "Click **Create a new key**, set **Access Type = Flash**, and click **Generate New Key**.",
-        org
-          ? ""
-          : "_Tip: pass your `organization` slug to `flash_setup` (e.g. \"5VYFCW7M\") to deeplink straight to your org's keys page._",
+        "**Step 1 — Get your Flash API key.**",
+        `Open: ${MCP_SETUP_URL}`,
+        "Log in if prompted, click **Generate API Key** (your existing key is shown if you already have one), then **Copy & Close**.",
         "Then call `flash_setup` again with `apiKey: \"dpka_…\"`.",
         "",
       );

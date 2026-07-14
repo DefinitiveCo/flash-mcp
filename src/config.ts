@@ -12,7 +12,7 @@ const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 export interface FlashConfig {
   /** Per-chain RPC URL overrides, keyed by Flash chain id (e.g. { base: "https://…" }). */
   rpc?: Record<string, string>;
-  /** Definitive organization slug, used to deeplink to the API-keys page. */
+  /** Definitive organization slug. Kept for reference; the MCP setup page uses the logged-in org. */
   organization?: string;
 }
 

@@ -68,9 +68,9 @@ If it isn't on your PATH, run it via node: `node /path/to/flash-mcp/dist/index.j
 
 ## First-run setup
 
-1. Run the `flash_setup` tool with no arguments. It links you to your Definitive account and
-   tells you how to generate a key: **API Keys → Create a new key → Access Type = Flash →
-   Generate New Key**. Pass your `organization` slug to get a direct deeplink.
+1. Run the `flash_setup` tool with no arguments. It links you to the Definitive MCP setup page
+   (`app.definitive.fi/account/organization/mcp-setup`) — log in if prompted, click
+   **Generate API Key** (or copy your existing Flash key), then **Copy & Close**.
 2. Run `flash_setup` again with the key: `{ "apiKey": "dpka_…" }`.
 3. Add a funder wallet to trade: `{ "evmPrivateKey": "0x…" }` and/or `{ "svmPrivateKey": "…" }`.
 4. (Recommended) Set a custom RPC — the public defaults are rate-limited:
