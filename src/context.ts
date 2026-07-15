@@ -34,7 +34,8 @@ export async function requirePrivateKey(chainName: string): Promise<string> {
   if (!pk) {
     const which = kind === "svm-private-key" ? "Solana" : "EVM";
     throw new SetupError(
-      `No ${which} wallet private key configured. Run \`flash_setup\` with your ${which} private key to enable trading on ${chainName}.`,
+      `No ${which} wallet private key configured — needed to trade on ${chainName}. Add it from your own ` +
+        "terminal (never paste it into chat): run `npx -y @definitive-fi/flash-mcp setup`.",
     );
   }
   return pk;

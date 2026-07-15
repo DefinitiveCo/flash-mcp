@@ -15,12 +15,14 @@ The `definitive-flash` MCP server exposes: `flash_setup`, `flash_status`, `flash
    `flash_quote` result (price, expected output, price impact, fees) and get their explicit
    confirmation in this conversation. Never submit an order the user hasn't confirmed.
 2. **Never ask the user to paste a private key into chat**, and if they try, stop them —
-   it would flow through the model and the transcript. Route them to their own terminal:
+   it would flow through the model and the transcript. `flash_setup` does not accept private
+   keys. Route them to the interactive wizard in their own terminal:
    ```bash
-   npx -y @definitive-fi/flash-mcp set-key evm   # or: svm, api (hidden prompt → Keychain)
+   npx -y @definitive-fi/flash-mcp setup         # wizard: API key → wallets → RPCs
+   npx -y @definitive-fi/flash-mcp set-key evm   # or: svm, api (single hidden prompt → Keychain)
    ```
    or environment variables (`DEFINITIVE_PRIVATE_KEY`, `DEFINITIVE_SVM_PRIVATE_KEY`,
-   `DEFINITIVE_API_KEY`). The `flash_setup` key parameters exist only as a last-resort fallback.
+   `DEFINITIVE_API_KEY`).
 3. **Don't retry a failed submit blindly.** Read the error, re-quote, and re-confirm —
    a timeout does not mean the order failed; check `flash_get_order` first.
 4. **One order at a time.** Never issue parallel `flash_submit_order` calls — wait for each
@@ -32,13 +34,16 @@ The `definitive-flash` MCP server exposes: `flash_setup`, `flash_status`, `flash
 
 ## First-run setup
 
-1. Call `flash_setup` with no arguments. If no API key is stored, it returns a link to
-   `app.definitive.fi/account/organization/mcp-setup` — the user logs in, clicks
-   **Generate API Key**, and copies it. An API key (`dpka_…`) is safe to accept in chat.
-2. Store it: `flash_setup { "apiKey": "dpka_…" }`.
-3. For trading, the user adds a funder wallet **from their own terminal** (see safety rail 2).
-4. Recommend a custom RPC (public defaults are rate-limited):
-   `flash_setup { "rpc": { "base": "https://…" } }`.
+1. Call `flash_setup` with no arguments to see what's configured, then relay its instructions:
+   the primary path is the interactive wizard the user runs **in their own terminal** —
+   `npx -y @definitive-fi/flash-mcp setup`. It opens the Definitive API-key page and walks
+   through the API key, funder wallets, and custom RPCs (hidden prompts → Keychain).
+2. If the user prefers to stay in chat, the API key alone is safe to accept (`dpka_…` cannot
+   move funds): store it with `flash_setup { "apiKey": "dpka_…" }`. It enables quoting.
+   Funder wallets can only be added via the wizard/CLI (see safety rail 2).
+3. After the wizard finishes, call `flash_status` to confirm what's configured.
+4. A custom RPC is recommended for heavy traders (public defaults are rate-limited) — the
+   wizard covers it, or `flash_setup { "rpc": { "base": "https://…" } }` from chat.
 
 `flash_status` shows what's configured and the supported chains at any time.
 

@@ -63,13 +63,15 @@ Provide a dedicated demo setup — do NOT hand over production keys:
 - A throwaway EVM wallet funded with a small amount (~$20 USDC + gas on Base) so
   reviewers can exercise `flash_submit_order` end to end.
 - Note for reviewers: credentials are entered via the `flash_setup` tool (API key)
-  and the `flash-mcp set-key evm` CLI (private key).
+  and the `flash-mcp setup` interactive CLI wizard (private keys — the tool never
+  accepts them, by design).
 
 ## Test cases — 5 positive
 
 1. **First-run setup guidance.** Prompt: "Set up Flash trading." → Agent calls
    `flash_setup` with no arguments. Expected: response lists what is configured and
-   returns the API-key generation link (`app.definitive.fi/account/organization/mcp-setup`);
+   directs the user to run the `npx -y @definitive-fi/flash-mcp setup` wizard in
+   their own terminal (with the API-key page link as an in-chat fallback);
    no error, no crash.
 2. **Store API key and confirm status.** Prompt: "Here's my Flash API key: dpka_<demo>."
    → `flash_setup { apiKey }` then `flash_status`. Expected: key accepted, stored in
@@ -94,8 +96,8 @@ Provide a dedicated demo setup — do NOT hand over production keys:
    warning that Flash keys start with `dpka_`.
 2. **Trade without a funder wallet.** With only an API key configured, prompt: "Buy
    $5 of WETH with USDC on Base." → `flash_submit_order`. Expected: no crash; clear
-   setup error explaining a funder wallet is required, pointing at
-   `flash-mcp set-key evm` — and explicitly discouraging pasting a private key into chat.
+   setup error explaining a funder wallet is required, pointing at the
+   `flash-mcp setup` wizard — and explicitly stating never to paste a private key into chat.
 3. **Unsupported chain / bad address.** Prompt: "Check balances for wallet 0x123 on
    dogechain." → `flash_balances`. Expected: schema validation rejects the chain
    (enum of 12 supported chains); with a valid chain but malformed address, a

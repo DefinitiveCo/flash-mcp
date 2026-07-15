@@ -22,14 +22,12 @@ import { credentialSource, getCredential, maskSecret, setCredential } from "./cr
 import { FlashApiError } from "./flashClient.js";
 import { orderDetail, orderLine, quoteSummary, result } from "./format.js";
 import { cancelOrder, placeOrder } from "./orderFlow.js";
-import { runCli } from "./cli.js";
-import { evmAddressFromPrivateKey } from "./signing/evm.js";
-import { svmAddressFromSecret } from "./signing/svm.js";
+import { MCP_SETUP_URL, runCli } from "./cli.js";
 import type { FlashOrderStatus, OrderSide, OrderType, PriceTrigger } from "./types.js";
 
-// Routed modal in the Definitive app that walks the user through generating a
-// Flash API key (one-click generate + copy). Uses the org they're logged into.
-const MCP_SETUP_URL = "https://app.definitive.fi/account/organization/mcp-setup";
+// The interactive out-of-band wizard users run in their own terminal. Handles
+// API key, funder wallets, and RPCs; secrets never pass through the chat.
+const WIZARD_CMD = "npx -y @definitive-fi/flash-mcp setup";
 
 // ----- shared zod fragments for trade params -----
 const chainEnum = z.enum(CHAIN_IDS as [string, ...string[]]);
@@ -126,27 +124,16 @@ registerTool(
   {
     title: "Set up Flash credentials",
     description:
-      "Connect a Definitive account for trading on Flash. Call with no arguments to check what's " +
-      "configured and get a link to generate a Flash API key. Then call again with `apiKey` to store " +
-      "it, and `evmPrivateKey` (and/or `svmPrivateKey`) to enable trading. Secrets are stored in the " +
-      "macOS Keychain, never in plaintext.",
+      "Connect a Definitive account for trading on Flash. The primary setup path is the interactive " +
+      "wizard the user runs in their OWN terminal — `" + WIZARD_CMD + "` — which handles the API key, " +
+      "funder wallets, and RPCs; direct the user there rather than collecting credentials in chat. " +
+      "Call this tool with no arguments to see what's configured and get the exact instructions to " +
+      "relay. It also accepts `apiKey` (safe in chat — it cannot move funds) and `rpc` overrides. " +
+      "Wallet private keys are NEVER accepted here and must never be pasted into the conversation.",
     // Writes credentials/config locally; never deletes anything and never touches the network.
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       apiKey: z.string().optional().describe("Definitive Flash API key (starts with dpka_)"),
-      evmPrivateKey: z
-        .string()
-        .optional()
-        .describe(
-          "DISCOURAGED — do not ask the user to paste a private key into chat; it would flow through " +
-            "the model and transcript. Prefer the `flash-mcp set-key evm` CLI. Only accepted here as a fallback.",
-        ),
-      svmPrivateKey: z
-        .string()
-        .optional()
-        .describe(
-          "DISCOURAGED — see evmPrivateKey. Prefer the `flash-mcp set-key svm` CLI instead of pasting into chat.",
-        ),
       organization: z
         .string()
         .optional()
@@ -186,66 +173,53 @@ registerTool(
       await setCredential("api-key", args.apiKey);
       stored.push("API key");
     }
-    if (args.evmPrivateKey) {
-      const addr = evmAddressFromPrivateKey(args.evmPrivateKey); // validates
-      await setCredential("evm-private-key", args.evmPrivateKey);
-      stored.push(`EVM wallet (${addr})`);
-    }
-    if (args.svmPrivateKey) {
-      const addr = svmAddressFromSecret(args.svmPrivateKey); // validates
-      await setCredential("svm-private-key", args.svmPrivateKey);
-      stored.push(`Solana wallet (${addr})`);
-    }
 
     const apiSource = await credentialSource("api-key");
     const evmAddr = await funderAddressFor("base");
     const svmAddr = await funderAddressFor("solana");
+    const rpcChains = Object.keys(getConfig().rpc ?? {});
 
     const lines: string[] = [];
     if (stored.length) lines.push(`✅ Stored: ${stored.join(", ")}.`, "");
 
-    if (apiSource === "none") {
-      lines.push(
-        "**Step 1 — Get your Flash API key.**",
-        `Open: ${MCP_SETUP_URL}`,
-        "Log in if prompted, click **Generate API Key** (your existing key is shown if you already have one), then **Copy & Close**.",
-        "Then call `flash_setup` again with `apiKey: \"dpka_…\"`.",
-        "",
-      );
-    } else {
-      lines.push(`✅ API key configured (source: ${apiSource}).`);
-    }
-
     lines.push(
-      "",
-      "The API key is all you need to **quote** prices. Everything below is **optional** — add it only when you want to.",
-      "",
-      "**Step 2 (optional) — Add a funder wallet** — only needed to actually *place* trades.",
-      "🔒 Don't paste a private key into chat (it would pass through the model and transcript). Store it",
-      "securely from your own terminal; it's typed into a hidden prompt and written straight to the Keychain:",
-      "```",
-      "node " + process.argv[1] + " set-key evm    # or: svm",
-      "```",
-      "_(If installed on PATH, just `flash-mcp set-key evm`.)_",
-      evmAddr ? `✅ EVM wallet: ${evmAddr}` : "• EVM wallet: not set (optional)",
-      svmAddr ? `✅ Solana wallet: ${svmAddr}` : "• Solana wallet: not set (optional)",
-    );
-
-    const rpcCfg = getConfig().rpc ?? {};
-    const rpcChains = Object.keys(rpcCfg);
-    lines.push(
-      "**Step 3 (optional) — Set a custom RPC** — recommended if you trade a lot, since public defaults are rate-limited.",
+      "**Current configuration**",
+      apiSource === "none" ? "- API key: ❌ not set" : `- API key: ✅ configured (source: ${apiSource})`,
+      evmAddr ? `- EVM funder wallet: ✅ ${evmAddr}` : "- EVM funder wallet: not set (needed to trade on EVM chains)",
+      svmAddr ? `- Solana funder wallet: ✅ ${svmAddr}` : "- Solana funder wallet: not set (needed to trade on Solana)",
       rpcChains.length
-        ? `✅ Custom RPC set for: ${rpcChains.join(", ")}`
-        : "• Custom RPC: not set (optional — call `flash_setup` with `rpc: { \"base\": \"https://…\" }`)",
+        ? `- Custom RPC: ✅ ${rpcChains.join(", ")}`
+        : "- Custom RPC: none (using public defaults, which are rate-limited)",
+      "",
     );
 
-    if (apiSource !== "none") {
+    const needsKey = apiSource === "none";
+    const needsWallet = !evmAddr && !svmAddr;
+
+    if (needsKey || needsWallet) {
       lines.push(
-        "",
-        evmAddr || svmAddr
-          ? "🎉 You're fully set up. Try `flash_quote` to price a trade, then `flash_submit_order` to execute."
-          : "🎉 Ready to quote — try `flash_quote`. Add a wallet (Step 2) whenever you want to place real trades.",
+        "**To finish setup, run the interactive wizard in your own terminal** (not through this chat):",
+        "```",
+        WIZARD_CMD,
+        "```",
+        "It opens the Definitive API-key page, then walks through the API key, funder wallets, and",
+        "RPC endpoints. Secrets are typed into hidden prompts and stored in the macOS Keychain — they",
+        "never pass through the model or the conversation transcript. Every step can be skipped and",
+        "re-run later. When it finishes, run `flash_status` here to confirm.",
+      );
+      if (needsKey) {
+        lines.push(
+          "",
+          "_Prefer to stay in chat?_ The API key alone enables quoting and is safe to paste here (it",
+          `cannot move funds): open ${MCP_SETUP_URL} , log in, click **Generate API Key**, then`,
+          "**Copy & Close**, and paste the `dpka_…` key into the conversation. Funder wallets, however,",
+          "can **only** be added from your own terminal — never paste a wallet private key into chat.",
+        );
+      }
+    } else {
+      lines.push(
+        "🎉 You're fully set up. Try `flash_quote` to price a trade, then `flash_submit_order` to execute.",
+        "To change wallets or keys later, run `" + WIZARD_CMD + "` in your terminal.",
       );
     }
     return result(lines.join("\n"));

@@ -95,11 +95,38 @@ bun run build    # compiles to dist/
 claude mcp add definitive-flash -- node "$PWD/dist/index.js"
 ```
 
-## Secure credential entry (recommended)
+## First-run setup
+
+Run the interactive wizard in your own terminal:
+
+```bash
+npx -y @definitive-fi/flash-mcp setup
+```
+
+It walks through everything in one pass:
+
+1. Opens the Definitive MCP setup page (`app.definitive.fi/account/organization/mcp-setup`) —
+   log in, click **Generate API Key**, **Copy & Close** — and prompts you to paste the key.
+2. Prompts for your EVM funder wallet private key (press Enter to skip).
+3. Prompts for your Solana funder wallet secret (press Enter to skip — you can add either later).
+4. Prompts for custom RPC endpoints per chain, pre-filled with the public defaults
+   (which are rate-limited — a personal endpoint is recommended if you trade often).
+
+Secrets are typed into **hidden prompts** and written straight to the macOS Keychain — they
+never appear on screen, in shell history, or in any chat transcript. Every step can be skipped
+and the wizard re-run at any time.
+
+That's it — in your MCP client, `flash_status` to confirm, `flash_quote` to price,
+`flash_submit_order` to trade.
 
 **Never paste a wallet private key into the chat** — it would pass through the model and the
-conversation transcript. Instead, store secrets from your own terminal via the built-in CLI. The
-key is typed into a hidden prompt (no echo) and written straight to the Keychain:
+conversation transcript. The `flash_setup` tool does not accept private keys; wallets are added
+only via the wizard or CLI below. (The API key alone is safe to paste in chat if you prefer —
+it can't move funds — via `flash_setup { "apiKey": "dpka_…" }`; it enables quoting.)
+
+### Individual CLI commands
+
+Each wizard step is also available as a one-shot command:
 
 ```bash
 flash-mcp set-key evm     # or: svm, api   (prompts hidden, stores in Keychain)
@@ -111,18 +138,6 @@ flash-mcp remove-key evm
 ```
 
 If it isn't on your PATH, run it via npx: `npx -y @definitive-fi/flash-mcp set-key evm`.
-
-## First-run setup
-
-1. Run the `flash_setup` tool with no arguments. It links you to the Definitive MCP setup page
-   (`app.definitive.fi/account/organization/mcp-setup`) — log in if prompted, click
-   **Generate API Key** (or copy your existing Flash key), then **Copy & Close**.
-2. Run `flash_setup` again with the key: `{ "apiKey": "dpka_…" }`.
-3. Add a funder wallet to trade: `{ "evmPrivateKey": "0x…" }` and/or `{ "svmPrivateKey": "…" }`.
-4. (Recommended) Set a custom RPC — the public defaults are rate-limited:
-   `{ "rpc": { "base": "https://…" } }`. Pass an empty string to clear one.
-
-That's it — `flash_quote` to price, `flash_submit_order` to trade.
 
 ## Credential storage
 
