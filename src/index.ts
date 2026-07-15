@@ -88,10 +88,25 @@ const { version: PKG_VERSION } = createRequire(import.meta.url)("../package.json
 
 const server = new McpServer({ name: "definitive-flash", version: PKG_VERSION });
 
+// MCP tool annotations (readOnlyHint / destructiveHint / idempotentHint /
+// openWorldHint). Clients use these for permission gating, and the Codex plugin
+// directory review rejects tools whose hints don't match real behavior.
+interface ToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
 /** Register a tool whose handler errors are turned into friendly, non-crashing results. */
 function registerTool(
   name: string,
-  def: { title: string; description: string; inputSchema: Record<string, z.ZodTypeAny> },
+  def: {
+    title: string;
+    description: string;
+    inputSchema: Record<string, z.ZodTypeAny>;
+    annotations: ToolAnnotations;
+  },
   fn: (args: any) => Promise<{ content: { type: "text"; text: string }[] }>,
 ) {
   (server.registerTool as any)(name, def, async (args: any) => {
@@ -115,6 +130,8 @@ registerTool(
       "configured and get a link to generate a Flash API key. Then call again with `apiKey` to store " +
       "it, and `evmPrivateKey` (and/or `svmPrivateKey`) to enable trading. Secrets are stored in the " +
       "macOS Keychain, never in plaintext.",
+    // Writes credentials/config locally; never deletes anything and never touches the network.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       apiKey: z.string().optional().describe("Definitive Flash API key (starts with dpka_)"),
       evmPrivateKey: z
@@ -243,6 +260,7 @@ registerTool(
   {
     title: "Flash setup status",
     description: "Show which credentials and wallets are configured, and the supported chains.",
+    annotations: { readOnlyHint: true, openWorldHint: false },
     inputSchema: {},
   },
   async () => {
@@ -278,6 +296,7 @@ registerTool(
     description:
       "Price a trade across 200+ liquidity sources without executing. Returns the spend/receive amounts " +
       "and estimated fees. Does not require a wallet.",
+    annotations: { readOnlyHint: true, openWorldHint: true },
     inputSchema: tradeShape,
   },
   async (args) => {
@@ -302,6 +321,7 @@ registerTool(
       "funder wallet. Read-only; works without an API key. On Solana, omitting `tokens` lists " +
       "every SPL token the wallet holds; on EVM chains, pass the ERC-20 addresses you want " +
       "(only the native balance is returned otherwise).",
+    annotations: { readOnlyHint: true, openWorldHint: true },
     inputSchema: {
       chain: chainEnum,
       address: z
@@ -353,6 +373,8 @@ registerTool(
       "Execute a trade end to end: fetch a fresh quote, send any required wrap/approve transactions, sign " +
       "the order with your funder wallet, and submit it. For market orders it polls until the order fills " +
       "(or times out). Requires an API key and the matching funder wallet private key. This spends real funds.",
+    // Spends real funds and cannot be undone once filled — clients should always confirm with the user.
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     inputSchema: {
       ...tradeShape,
       rpcUrl: z.string().optional().describe("Override the RPC used for on-chain wrap/approve sends"),
@@ -394,6 +416,7 @@ registerTool(
   {
     title: "Get a Flash order",
     description: "Fetch the status, fills, and details of a single order by id.",
+    annotations: { readOnlyHint: true, openWorldHint: true },
     inputSchema: { orderId: z.string().describe("The order id returned at submit time") },
   },
   async (args) => {
@@ -412,6 +435,7 @@ registerTool(
     title: "List Flash orders",
     description:
       "List recent orders for a funder wallet. Defaults to the configured EVM wallet if no address is given.",
+    annotations: { readOnlyHint: true, openWorldHint: true },
     inputSchema: {
       funderAddress: z.string().optional().describe("Funder wallet address (defaults to configured EVM wallet)"),
       statuses: z
@@ -450,6 +474,8 @@ registerTool(
     description:
       "Cancel a resting order (limit/twap/trigger). Signs the cancel message with your funder wallet. " +
       "Requires the funder private key for the order's chain.",
+    // Kills a resting order (destructive), but re-cancelling the same order is a no-op.
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     inputSchema: {
       orderId: z.string().describe("The order id to cancel"),
       chain: chainEnum.describe("The chain the order is on (selects which wallet signs)"),

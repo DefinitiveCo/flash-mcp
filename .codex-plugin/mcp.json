@@ -1,0 +1,6 @@
+{
+  "definitive-flash": {
+    "command": "npx",
+    "args": ["-y", "@definitive-fi/flash-mcp"]
+  }
+}
