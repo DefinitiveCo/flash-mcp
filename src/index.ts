@@ -22,6 +22,7 @@ import { credentialSource, getCredential, maskSecret, setCredential } from "./cr
 import { FlashApiError } from "./flashClient.js";
 import { orderDetail, orderLine, quoteSummary, result } from "./format.js";
 import { cancelOrder, placeOrder } from "./orderFlow.js";
+import { resolveNativeAssets } from "./native.js";
 import { MCP_SETUP_URL, runCli } from "./cli.js";
 import type { FlashOrderStatus, OrderSide, OrderType, PriceTrigger } from "./types.js";
 
@@ -41,8 +42,18 @@ const triggerSchema = z.object({
 const tradeShape = {
   targetChain: chainEnum.describe("Chain of the target (traded) asset"),
   contraChain: chainEnum.describe("Chain of the contra asset (usually same as targetChain)"),
-  targetAsset: z.string().describe("Address of the target (traded) asset"),
-  contraAsset: z.string().describe("Address of the contra asset — spent on buys, received on sells"),
+  targetAsset: z
+    .string()
+    .describe(
+      "Address of the target (traded) asset. A native gas asset (its symbol like \"ETH\", \"native\", the " +
+        "zero address, or the 0xEeee… sentinel) is auto-routed through the chain's wrapped-native token.",
+    ),
+  contraAsset: z
+    .string()
+    .describe(
+      "Address of the contra asset — spent on buys, received on sells. Native gas assets are auto-wrapped " +
+        "like targetAsset (the spent side is wrapped before the trade).",
+    ),
   side: sideEnum,
   qty: z
     .string()
@@ -275,10 +286,16 @@ registerTool(
   },
   async (args) => {
     const { client } = await resolveClient();
-    const req = tradeRequestFromArgs(args);
+    // Native gas assets (ETH, the zero/0xEeee sentinels, "native") aren't
+    // tradable on Flash — rewrite them to the chain's wrapped-native token so
+    // the quote succeeds, and surface what was substituted.
+    const { req, notes } = resolveNativeAssets(tradeRequestFromArgs(args));
     const funder = await funderAddressFor(req.targetChain);
     const quote = await client.quote({ ...req, ...(funder ? { funderAddress: funder } : {}) });
-    return result(quoteSummary(quote), quote);
+    const summary = notes.length
+      ? `${notes.map((n) => `> ℹ️ ${n}`).join("\n")}\n\n${quoteSummary(quote)}`
+      : quoteSummary(quote);
+    return result(summary, quote);
   },
 );
 
@@ -374,7 +391,9 @@ registerTool(
   },
   async (args) => {
     const client = await requireClient();
-    const req = tradeRequestFromArgs(args);
+    // Rewrite native-asset references to the chain's wrapped-native token; the
+    // order flow then executes the API-provided wrap tx for the spent amount.
+    const { req, notes } = resolveNativeAssets(tradeRequestFromArgs(args));
     const privateKey = await requirePrivateKey(req.targetChain);
     const res = await placeOrder(client, {
       ...req,
@@ -387,6 +406,7 @@ registerTool(
     const lines = [
       `**Order submitted: \`${res.orderId}\`**`,
       "",
+      ...notes.map((n) => `- ℹ️ ${n}`),
       ...res.steps.map((s) => `- ${s}`),
     ];
     if (res.finalOrder) {

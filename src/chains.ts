@@ -26,19 +26,34 @@ export interface ChainInfo {
    * native-only, and every balance is still read live on-chain.
    */
   explorerApi?: string;
+  /**
+   * Canonical wrapped-native token. Flash prices trades against contract
+   * addresses only — it cannot trade the raw gas asset — so when a caller
+   * references the native asset we substitute this token and let the API
+   * return a wrap transaction for the spent amount (see `native.ts`). Every
+   * address here is verified against the chain's canonical block explorer;
+   * omit a chain rather than guess, so an unknown native trade fails loudly
+   * instead of trading the wrong token. Undefined for Solana, which wraps via
+   * the `svmUseNativeSOL` flag and the wSOL mint instead.
+   */
+  wrappedNative?: { symbol: string; address: string };
 }
 
+// Wrapped-native addresses below are each verified against the chain's canonical
+// explorer (WETH/WBNB/WPOL/WAVAX/WHYPE/WXPL and the Robinhood-chain WETH). Monad
+// is intentionally left without one: its mainnet wrapped-MON could not be
+// verified, so native-MON trades fail loudly rather than risk a wrong token.
 export const CHAINS: Record<string, ChainInfo> = {
-  ethereum: { id: "ethereum", kind: "evm", chainId: 1, nativeSymbol: "ETH", defaultRpc: "https://eth.llamarpc.com", explorerApi: "https://eth.blockscout.com" },
-  optimism: { id: "optimism", kind: "evm", chainId: 10, nativeSymbol: "ETH", defaultRpc: "https://mainnet.optimism.io", explorerApi: "https://optimism.blockscout.com" },
-  bsc: { id: "bsc", kind: "evm", chainId: 56, nativeSymbol: "BNB", defaultRpc: "https://bsc-dataseed.binance.org" },
-  polygon: { id: "polygon", kind: "evm", chainId: 137, nativeSymbol: "POL", defaultRpc: "https://polygon-rpc.com", explorerApi: "https://polygon.blockscout.com" },
-  base: { id: "base", kind: "evm", chainId: 8453, nativeSymbol: "ETH", defaultRpc: "https://mainnet.base.org", explorerApi: "https://base.blockscout.com" },
-  arbitrum: { id: "arbitrum", kind: "evm", chainId: 42161, nativeSymbol: "ETH", defaultRpc: "https://arb1.arbitrum.io/rpc", explorerApi: "https://arbitrum.blockscout.com" },
-  avalanche: { id: "avalanche", kind: "evm", chainId: 43114, nativeSymbol: "AVAX", defaultRpc: "https://api.avax.network/ext/bc/C/rpc" },
-  hyperevm: { id: "hyperevm", kind: "evm", chainId: 999, nativeSymbol: "HYPE", defaultRpc: "https://rpc.hyperliquid.xyz/evm" },
-  robinhood: { id: "robinhood", kind: "evm", chainId: 4663, nativeSymbol: "ETH", defaultRpc: "https://rpc.mainnet.chain.robinhood.com", explorerApi: "https://robinhoodchain.blockscout.com" },
-  plasma: { id: "plasma", kind: "evm", chainId: 9745, nativeSymbol: "XPL", defaultRpc: "https://rpc.plasma.to", explorerApi: "https://plasma.blockscout.com" },
+  ethereum: { id: "ethereum", kind: "evm", chainId: 1, nativeSymbol: "ETH", defaultRpc: "https://eth.llamarpc.com", explorerApi: "https://eth.blockscout.com", wrappedNative: { symbol: "WETH", address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" } },
+  optimism: { id: "optimism", kind: "evm", chainId: 10, nativeSymbol: "ETH", defaultRpc: "https://mainnet.optimism.io", explorerApi: "https://optimism.blockscout.com", wrappedNative: { symbol: "WETH", address: "0x4200000000000000000000000000000000000006" } },
+  bsc: { id: "bsc", kind: "evm", chainId: 56, nativeSymbol: "BNB", defaultRpc: "https://bsc-dataseed.binance.org", wrappedNative: { symbol: "WBNB", address: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c" } },
+  polygon: { id: "polygon", kind: "evm", chainId: 137, nativeSymbol: "POL", defaultRpc: "https://polygon-rpc.com", explorerApi: "https://polygon.blockscout.com", wrappedNative: { symbol: "WPOL", address: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" } },
+  base: { id: "base", kind: "evm", chainId: 8453, nativeSymbol: "ETH", defaultRpc: "https://mainnet.base.org", explorerApi: "https://base.blockscout.com", wrappedNative: { symbol: "WETH", address: "0x4200000000000000000000000000000000000006" } },
+  arbitrum: { id: "arbitrum", kind: "evm", chainId: 42161, nativeSymbol: "ETH", defaultRpc: "https://arb1.arbitrum.io/rpc", explorerApi: "https://arbitrum.blockscout.com", wrappedNative: { symbol: "WETH", address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1" } },
+  avalanche: { id: "avalanche", kind: "evm", chainId: 43114, nativeSymbol: "AVAX", defaultRpc: "https://api.avax.network/ext/bc/C/rpc", wrappedNative: { symbol: "WAVAX", address: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7" } },
+  hyperevm: { id: "hyperevm", kind: "evm", chainId: 999, nativeSymbol: "HYPE", defaultRpc: "https://rpc.hyperliquid.xyz/evm", wrappedNative: { symbol: "WHYPE", address: "0x5555555555555555555555555555555555555555" } },
+  robinhood: { id: "robinhood", kind: "evm", chainId: 4663, nativeSymbol: "ETH", defaultRpc: "https://rpc.mainnet.chain.robinhood.com", explorerApi: "https://robinhoodchain.blockscout.com", wrappedNative: { symbol: "WETH", address: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73" } },
+  plasma: { id: "plasma", kind: "evm", chainId: 9745, nativeSymbol: "XPL", defaultRpc: "https://rpc.plasma.to", explorerApi: "https://plasma.blockscout.com", wrappedNative: { symbol: "WXPL", address: "0x6100E367285b01F48D07953803A2d8dCA5D19873" } },
   monad: { id: "monad", kind: "evm", chainId: 143, nativeSymbol: "MON", defaultRpc: "https://rpc.monad.xyz" },
   solana: { id: "solana", kind: "svm", nativeSymbol: "SOL", defaultRpc: "https://api.mainnet-beta.solana.com" },
 };

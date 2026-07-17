@@ -163,6 +163,11 @@ public default.
   submits. For market orders it polls until the order reaches a terminal status.
 - EVM trades may send a one-time ERC-20 approve (and a wrap tx for native-asset trades) before
   signing — your wallet needs a little gas for those.
+- **Native gas assets are handled for you.** Flash prices token contracts, not the raw gas asset,
+  so referencing native ETH/BNB/POL/AVAX/HYPE/XPL/SOL (a bare symbol, `native`, the zero address,
+  or the `0xEeee…` sentinel) is automatically routed through the chain's wrapped-native token —
+  wrapping the spent amount first when needed. Every substitution is noted in the quote/order
+  output. You end up holding the wrapped token (e.g. WETH); unwrap separately if you need native.
 - `qty` is the amount being **spent**: in `contraAsset` units for buys, `targetAsset` units for sells.
 - Supported chains: ethereum, optimism, bsc, polygon, base, arbitrum, avalanche, hyperevm,
   robinhood, plasma, monad, solana.
