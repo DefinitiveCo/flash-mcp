@@ -57,6 +57,14 @@ The `definitive-flash` MCP server exposes: `flash_setup`, `flash_status`, `flash
   cover the spend plus gas.
 - Assets are **addresses**, not symbols. If the user gives a symbol, resolve the address on the
   target chain and confirm it with them before quoting — a wrong address trades the wrong token.
+- **Native gas assets (ETH, BNB, POL, AVAX, HYPE, XPL, SOL) are handled automatically.** Flash
+  can't trade the raw gas asset, so if the user references it — a bare symbol like `ETH`, the
+  string `native`, the zero address, or the `0xEeee…` sentinel — the server rewrites it to that
+  chain's wrapped-native token (WETH, WBNB, wSOL, …) and, when it's the asset being spent, wraps
+  it first as part of the trade. The quote/order output notes every substitution; relay it so the
+  user knows they'll spend from (or receive) the wrapped token. You don't need to look up wrapped
+  addresses yourself. (Monad has no configured wrapped-MON — a native-MON trade errors with a
+  clear message; pass the wrapped address explicitly.)
 - `qty` is the amount being **spent**: `contraAsset` units for buys, `targetAsset` units for sells.
 - Order types: `market`, `limit` (requires `limitNotionalPrice`), `twap` (requires
   `durationSeconds` ≥ 300, optional `twapBucketCount`), `stop` / `stop-loss`, `take-profit`,
