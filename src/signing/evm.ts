@@ -9,7 +9,9 @@ import {
   createPublicClient,
   createWalletClient,
   defineChain,
+  erc20Abi,
   http,
+  parseUnits,
   type Hex,
   type PublicClient,
   type WalletClient,
@@ -92,6 +94,41 @@ export class EvmSigner {
       throw new Error(`${label} transaction ${hash} reverted on-chain.`);
     }
     return { hash, label };
+  }
+
+  /** Read an ERC-20 balance for this wallet. */
+  async erc20BalanceOf(token: string): Promise<bigint> {
+    return this.pub.readContract({
+      address: token as Hex,
+      abi: erc20Abi,
+      functionName: "balanceOf",
+      args: [this.account.address],
+    });
+  }
+
+  /**
+   * Wrap native gas into wrapped-native so a native-asset spend can settle as an
+   * ERC-20. Flash's EVM quote path never wraps for us, so we deposit the shortfall
+   * between the wrapped balance already held and the amount about to be spent.
+   * All supported native gas assets use 18 decimals. Returns the wrap details, or
+   * null when the wallet already holds enough wrapped-native (no tx sent).
+   *
+   * `deposit()` (selector 0xd0e30db0) is the canonical WETH-style payable wrap;
+   * every configured wrapped-native token is a WETH fork exposing it.
+   */
+  async wrapNative(
+    wrappedToken: string,
+    amountDecimal: string,
+  ): Promise<{ hash: Hex; wrappedWei: bigint } | null> {
+    const needWei = parseUnits(amountDecimal, 18);
+    const haveWei = await this.erc20BalanceOf(wrappedToken);
+    const deficit = needWei - haveWei;
+    if (deficit <= 0n) return null;
+    const { hash } = await this.sendAndWait(
+      { to: wrappedToken, data: "0xd0e30db0", value: deficit.toString() },
+      "wrap",
+    );
+    return { hash, wrappedWei: deficit };
   }
 
   /** EIP-191 personal_sign over the cancel message. */

@@ -3,6 +3,7 @@
 
 import { getChain } from "./chains.js";
 import { FlashClient } from "./flashClient.js";
+import type { EvmWrapDirective } from "./native.js";
 import { evmAddressFromPrivateKey, EvmSigner } from "./signing/evm.js";
 import { svmAddressFromSecret, SvmSigner } from "./signing/svm.js";
 import {
@@ -21,6 +22,11 @@ export interface PlaceOrderInput extends QuoteRequest {
   waitForFill?: boolean;
   /** Max seconds to poll before returning the last-seen status. */
   pollTimeoutSec?: number;
+  /**
+   * Set when the spent asset is native on an EVM chain: the flow wraps the native
+   * gas asset into wrapped-native before quoting (Flash's EVM path never wraps).
+   */
+  evmWrap?: EvmWrapDirective;
 }
 
 export interface PlaceOrderResult {
@@ -52,13 +58,13 @@ export async function placeOrder(client: FlashClient, input: PlaceOrderInput): P
   const steps: string[] = [];
 
   // The funder address must be present on the quote for it to return signing payloads.
-  const { privateKey, rpcUrl, waitForFill, pollTimeoutSec, ...quoteFields } = input;
+  const { privateKey, rpcUrl, waitForFill, pollTimeoutSec, evmWrap, ...quoteFields } = input;
 
   const funder =
     chain.kind === "evm" ? evmAddressFromPrivateKey(privateKey) : svmAddressFromSecret(privateKey);
   return withWalletLock(`${chain.id}:${funder}`, () =>
     chain.kind === "evm"
-      ? placeEvmOrder(client, quoteFields, privateKey, rpcUrl, waitForFill, pollTimeoutSec, steps)
+      ? placeEvmOrder(client, quoteFields, privateKey, rpcUrl, waitForFill, pollTimeoutSec, evmWrap, steps)
       : placeSvmOrder(client, quoteFields, privateKey, rpcUrl, waitForFill, pollTimeoutSec, steps),
   );
 }
@@ -70,10 +76,25 @@ async function placeEvmOrder(
   rpcUrl: string | undefined,
   waitForFill: boolean | undefined,
   pollTimeoutSec: number | undefined,
+  evmWrap: EvmWrapDirective | undefined,
   steps: string[],
 ): Promise<PlaceOrderResult> {
   const signer = new EvmSigner(privateKey, quoteFields.targetChain, rpcUrl);
   const req: QuoteRequest = { ...quoteFields, funderAddress: signer.address };
+
+  // 0. Wrap native gas into wrapped-native BEFORE quoting. Flash's EVM quote
+  // path treats the spent token as a plain ERC-20 and its balance check would
+  // reject a wallet holding native but no wrapped-native — so the wrap has to
+  // land first, and the subsequent quote then prices/approves against the WETH
+  // the wallet now holds.
+  if (evmWrap) {
+    const wrapped = await signer.wrapNative(evmWrap.wrapped.address, evmWrap.amount);
+    if (wrapped) {
+      steps.push(`Wrapped ${evmWrap.amount} native → ${evmWrap.wrapped.symbol} (tx ${wrapped.hash})`);
+    } else {
+      steps.push(`Already holding enough ${evmWrap.wrapped.symbol}; no wrap needed`);
+    }
+  }
 
   const quote = await client.quote(req);
   steps.push(`Quoted ${quote.quoteId}: spend ${quote.from.amount} → receive ${quote.to.amount}`);
@@ -81,7 +102,8 @@ async function placeEvmOrder(
   const evm = quote.evm;
   if (!evm) throw new Error("Quote returned no EVM signing payload for an EVM chain.");
 
-  // 1. Wrap native gas asset, if the quote priced against wrapped-native.
+  // 1. Wrap native gas asset, if the quote itself priced against wrapped-native
+  // (Flash does this for SVM; on EVM the pre-quote wrap above handles it).
   if (quote.wrap?.evmTx) {
     const { hash } = await signer.sendAndWait(quote.wrap.evmTx, "wrap");
     steps.push(`Wrapped native asset (tx ${hash})`);
@@ -238,17 +260,23 @@ function orderMatchesSubmit(order: FlashOrder, submit: SubmitOrderRequest): bool
 }
 
 // Look for an order that this submit created despite erroring. The list endpoint
-// is eventually consistent and can lag a few seconds behind a fresh order, so we
-// poll briefly. A candidate must match the submit's assets/side/qty/type AND be
-// absent from the pre-submit snapshot, so we never mistake a pre-existing
-// identical order for one we just placed.
+// is eventually consistent and can lag behind a fresh order, so we poll. A
+// candidate must match the submit's assets/side/qty/type AND be absent from the
+// pre-submit snapshot, so we never mistake a pre-existing identical order for one
+// we just placed.
+//
+// The window (~40s) is deliberately generous: on slower chains (e.g. Robinhood)
+// the list can lag 15s+ behind a just-filled order. Under-waiting here is the
+// dangerous direction — a false "not found" re-throws the misreported error, and
+// a caller that retries would double-spend (re-wrapping native and re-placing the
+// order). Over-waiting only delays a genuine failure's report.
 async function findCreatedOrder(
   client: FlashClient,
   submit: SubmitOrderRequest,
   funderAddress: string,
   priorIds: Set<string> | null,
 ): Promise<FlashOrder | undefined> {
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     try {
       const { orders } = await client.listOrders({ funderAddress, pageSize: 50 });
       // orders come back newest-first, so the first match is the most recent one.

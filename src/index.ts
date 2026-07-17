@@ -391,9 +391,10 @@ registerTool(
   },
   async (args) => {
     const client = await requireClient();
-    // Rewrite native-asset references to the chain's wrapped-native token; the
-    // order flow then executes the API-provided wrap tx for the spent amount.
-    const { req, notes } = resolveNativeAssets(tradeRequestFromArgs(args));
+    // Rewrite native-asset references to the chain's wrapped-native token. When
+    // the spent asset is native on EVM, `evmWrap` tells the order flow to wrap it
+    // client-side before quoting (Flash's EVM path doesn't wrap for us).
+    const { req, notes, evmWrap } = resolveNativeAssets(tradeRequestFromArgs(args));
     const privateKey = await requirePrivateKey(req.targetChain);
     const res = await placeOrder(client, {
       ...req,
@@ -401,6 +402,7 @@ registerTool(
       ...(args.rpcUrl ? { rpcUrl: args.rpcUrl as string } : {}),
       waitForFill: (args.waitForFill as boolean | undefined) ?? true,
       ...(args.pollTimeoutSec ? { pollTimeoutSec: args.pollTimeoutSec as number } : {}),
+      ...(evmWrap ? { evmWrap } : {}),
     });
 
     const lines = [

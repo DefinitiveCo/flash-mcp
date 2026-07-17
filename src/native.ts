@@ -46,10 +46,25 @@ export function isNativeAsset(asset: string, chainId: string): boolean {
   return a === SVM_SYSTEM_PROGRAM.toLowerCase(); // "sol" already covered by nativeSymbol
 }
 
+/**
+ * A pre-trade wrap the client must perform itself. Flash's EVM quote path does
+ * not wrap native gas assets (it treats the spent token as a plain ERC-20 and
+ * fails if the wrapped balance is short), so when the caller spends the native
+ * asset the order flow deposits it into wrapped-native before quoting/signing.
+ */
+export interface EvmWrapDirective {
+  chainId: string;
+  wrapped: { symbol: string; address: string };
+  /** Amount being spent, in native decimal units (== the trade qty). */
+  amount: string;
+}
+
 export interface NativeResolution {
   req: QuoteRequest;
   /** Human-readable notes for every substitution made; empty when none. */
   notes: string[];
+  /** Set when the spent asset is native on an EVM chain and must be wrapped client-side. */
+  evmWrap?: EvmWrapDirective;
 }
 
 /**
@@ -62,6 +77,7 @@ export interface NativeResolution {
 export function resolveNativeAssets(req: QuoteRequest): NativeResolution {
   const out: QuoteRequest = { ...req };
   const notes: string[] = [];
+  let evmWrap: EvmWrapDirective | undefined;
   const spentSide = req.side === "buy" ? "contra" : "target";
 
   for (const side of ["target", "contra"] as const) {
@@ -102,9 +118,10 @@ export function resolveNativeAssets(req: QuoteRequest): NativeResolution {
     }
     setAsset(wrapped.address);
     if (isSpent) {
+      evmWrap = { chainId, wrapped, amount: req.qty };
       notes.push(
-        `Spending native ${chain.nativeSymbol}: Flash will wrap it into ${wrapped.symbol} (\`${wrapped.address}\`) ` +
-          `before the trade. This adds a one-time on-chain wrap transaction, so keep a little native ${chain.nativeSymbol} for gas.`,
+        `Spending native ${chain.nativeSymbol}: it will be wrapped into ${wrapped.symbol} (\`${wrapped.address}\`) ` +
+          `first, via a one-time on-chain deposit, then traded. Keep a little native ${chain.nativeSymbol} for gas.`,
       );
     } else {
       notes.push(
@@ -114,5 +131,5 @@ export function resolveNativeAssets(req: QuoteRequest): NativeResolution {
     }
   }
 
-  return { req: out, notes };
+  return { req: out, notes, ...(evmWrap ? { evmWrap } : {}) };
 }
