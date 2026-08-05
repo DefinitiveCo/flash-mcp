@@ -4,9 +4,9 @@ An [MCP](https://modelcontextprotocol.io) server that lets traders quote, execut
 trades on the [Definitive Flash API](https://flash.definitive.fi/docs) directly from any MCP
 client (Claude Code, Claude Desktop, Cursor, etc.).
 
-Flash routes across 200+ liquidity sources on 12 chains and returns a signable payload. This
-server handles the full flow for you: **quote → wrap/approve → sign → submit → poll for fill**,
-for both EVM wallets and Solana.
+Flash routes across 200+ liquidity sources on 12 chains and returns a signable payload. Use a
+locally configured wallet for the full **quote → wrap/approve → sign → submit → poll for fill**
+flow, or prepare and sign with an external wallet and submit only the signed fields.
 
 ## What it does
 
@@ -17,6 +17,7 @@ for both EVM wallets and Solana.
 | `flash_quote` | Price a trade without executing. No wallet required. |
 | `flash_balances` | Native + token balances for any wallet, via the built-in per-chain RPCs. Read-only. |
 | `flash_submit_order` | Execute a trade end to end (market, limit, twap, stop, take-profit, bracket). Spends real funds. |
+| `flash_submit_signed_order` | Submit an externally prepared and signed order. Destructive and non-idempotent: it spends real funds and a repeated call can create another order. |
 | `flash_get_order` | Status, fills, and detail for one order. |
 | `flash_list_orders` | Recent orders for a funder wallet. |
 | `flash_cancel_order` | Cancel a resting order. |
@@ -97,7 +98,8 @@ claude mcp add definitive-flash -- node "$PWD/dist/index.js"
 
 ## First-run setup
 
-Run the interactive wizard in your own terminal:
+The interactive wizard is an optional convenience for configuring a personal API key, a local
+signing wallet, and custom RPCs. Run it in your own terminal:
 
 ```bash
 npx -y @definitive-fi/flash-mcp setup
@@ -116,13 +118,20 @@ Secrets are typed into **hidden prompts** and written straight to the macOS Keyc
 never appear on screen, in shell history, or in any chat transcript. Every step can be skipped
 and the wizard re-run at any time.
 
-That's it — in your MCP client, `flash_status` to confirm, `flash_quote` to price,
-`flash_submit_order` to trade.
+That's it — in your MCP client, `flash_status` to confirm, `flash_quote` to price, and either
+`flash_submit_order` for local signing or `flash_submit_signed_order` for external signing.
 
 **Never paste a wallet private key into the chat** — it would pass through the model and the
 conversation transcript. The `flash_setup` tool does not accept private keys; wallets are added
-only via the wizard or CLI below. (The API key alone is safe to paste in chat if you prefer —
-it can't move funds — via `flash_setup { "apiKey": "dpka_…" }`; it enables quoting.)
+only via the wizard or CLI below. (A personal API key alone is safe to paste in chat if you
+prefer — it can't move funds — via `flash_setup { "apiKey": "dpka_…" }`.)
+
+For quotes and submissions, the server uses the configured API key when present and otherwise
+sends its embedded/default credential. A user API key is optional and remains useful for
+integrator attribution and account-specific configuration. A locally stored wallet is also
+optional: external signing works without giving this server a wallet secret. This describes the
+server's credential-selection behavior; it does not claim that production trading permission for
+the embedded/default credential was independently tested here.
 
 ### Individual CLI commands
 
@@ -157,17 +166,62 @@ RPC endpoints default to public nodes per chain (rate-limited). Set your own the
 first: per-call `rpcUrl` argument → `DEFINITIVE_RPC_<CHAIN>` env var → `flash_setup` config →
 public default.
 
+## External-wallet signing
+
+Use this path when the wallet signs and sends preparation actions outside this MCP server:
+
+1. Call `flash_quote` with the trade fields and `funderAddress` (`flash_quote.funderAddress`).
+   Native EVM intent may be expressed with the supported symbol/`native`/zero-address/0xEeee
+   aliases; the server sends the canonical native sentinel to `/quote`. Supplying
+   `funderAddress` prevents the server from deriving or reading a local wallet address. Read the
+   complete response from `structuredContent.quote` (the same raw quote is retained in the text
+   output).
+2. Complete the returned preparation actions externally, in order:
+   - EVM: broadcast `quote.wrap.evmTx` when present, then `quote.evm.approveTx` when present.
+     Sign the exact `quote.evm.orderTypedData`; if `quote.evm.permitTypedData` is present, sign
+     that exact payload too.
+   - SVM: execute `quote.svm.ataSetupIxs` first when present, then
+     `quote.wrap.svmInstructions`. Next, co-sign `quote.svm.sponsoredDelegateTx` when present,
+     otherwise execute `quote.svm.delegateIx`; finally sign `quote.svm.orderMessage`.
+3. Call `flash_submit_signed_order` while that same quote remains valid. Use
+   `quote.targetAsset` and `quote.contraAsset`, not the original native aliases, plus the common
+   fields `funderAddress`, `quoteId`, and `userSignature`. Preserve `recipientAddress` for a
+   cross-chain request and pass the applicable `bridgeQuoteId` from the quote.
+   - EVM: pass `evmOrderTypedData`; when Permit2 is used, pass `evmPermitTypedData` and
+     `evmPermitSignature` together.
+   - SVM: pass `svmNonce`, `svmDeadline`, and the co-signed
+     `svmSponsoredDelegateTx` when applicable.
+
+Trade fields shared by quote and submit include `limitCrossPrice`, `recipientAddress`,
+`startTime`, `twapBucketCount`, `triggers`, and `flashIntegratorFeeBps`. Quote-only controls are
+`evmUsePermit2`, `svmUseNativeSOL`, `expireTime`, and `durationSeconds`; do not include them in
+`flash_submit_signed_order`. Submit-only metadata includes `bridgeQuoteId` and
+`erc8021AttributionCode`, in addition to the chain-specific signed fields above.
+
+The wrap/approval transactions and SVM wrap/delegate instructions are preparation actions; they
+are executed externally and are not fields for `POST /v1/order`. `flash_submit_signed_order`
+does not accept a private key. It is destructive and non-idempotent. Although the server attempts
+to reconcile an ambiguous response with the order list, never blindly retry a failed or timed-out
+submit: first inspect the reported order id, `flash_get_order`, and `flash_list_orders`. Re-quote
+only when trade inputs change or the quote is stale or invalid; quote-returned preparation alone
+does not require a re-quote. Get explicit confirmation before any new submission.
+
 ## Notes
 
 - **`flash_submit_order` spends real funds.** It quotes fresh, signs with your stored key, and
   submits. For market orders it polls until the order reaches a terminal status.
-- EVM trades may send a one-time ERC-20 approve (and a wrap tx for native-asset trades) before
-  signing — your wallet needs a little gas for those.
-- **Native gas assets are handled for you.** Flash prices token contracts, not the raw gas asset,
-  so referencing native ETH/BNB/POL/AVAX/HYPE/XPL/SOL (a bare symbol, `native`, the zero address,
-  or the `0xEeee…` sentinel) is automatically routed through the chain's wrapped-native token —
-  wrapping the spent amount first when needed. Every substitution is noted in the quote/order
-  output. You end up holding the wrapped token (e.g. WETH); unwrap separately if you need native.
+- **`flash_submit_signed_order` also spends real funds.** It submits already-signed fields and
+  can create another order if repeated; use the same fresh-quote, confirmation, serialization,
+  and no-blind-retry precautions.
+- EVM trades may require a one-time ERC-20 approve (and a wrap tx for native-asset trades) before
+  signing — your wallet needs a little gas. `flash_submit_order` sends these locally;
+  external-wallet users execute them before `flash_submit_signed_order`.
+- **Native gas assets are normalized for you.** For an EVM spend, a native alias is quoted via the
+  canonical native sentinel so the response can provide `wrap.evmTx`; the quote's asset fields
+  contain the normalized addresses used for signing and submit. Received native assets are routed
+  to their configured wrapped token. Solana native intent uses wSOL plus `svmUseNativeSOL`.
+  The local signing flow executes preparation itself; external-wallet users execute the returned
+  actions and submit the quote-normalized assets. Unwrap received wrapped assets separately if needed.
 - `qty` is the amount being **spent**: in `contraAsset` units for buys, `targetAsset` units for sells.
 - Supported chains: ethereum, optimism, bsc, polygon, base, arbitrum, avalanche, hyperevm,
   robinhood, plasma, monad, solana.
