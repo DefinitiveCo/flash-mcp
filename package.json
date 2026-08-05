@@ -17,6 +17,7 @@
     "build": "tsc",
     "dev": "node --import tsx src/index.ts",
     "start": "node dist/index.js",
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "prepare": "tsc && node -e \"const fs=require('fs');fs.mkdirSync('node_modules/.bin',{recursive:true});try{fs.symlinkSync('../../dist/index.js','node_modules/.bin/flash-mcp')}catch{};fs.chmodSync('dist/index.js',0o755)\""
   },

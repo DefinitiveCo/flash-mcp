@@ -6,11 +6,12 @@ export type OrderSide = "buy" | "sell";
 export type TriggerType = "upper" | "lower";
 
 export interface PriceTrigger {
-  notionalPrice: string;
+  notionalPrice?: string;
+  crossPrice?: string;
   triggerType: TriggerType;
 }
 
-export interface QuoteRequest {
+export interface OrderTradeFields {
   targetChain: string;
   contraChain: string;
   targetAsset: string;
@@ -22,13 +23,20 @@ export interface QuoteRequest {
   maxSlippage?: string;
   maxPriceImpact?: string;
   limitNotionalPrice?: string;
-  funderAddress?: string;
-  svmUseNativeSOL?: boolean;
+  limitCrossPrice?: string;
+  recipientAddress?: string;
   flashIntegratorFeeBps?: string;
-  expireTime?: string;
-  durationSeconds?: number;
+  startTime?: string;
   twapBucketCount?: number;
   triggers?: PriceTrigger[];
+}
+
+export interface QuoteRequest extends OrderTradeFields {
+  funderAddress?: string;
+  evmUsePermit2?: boolean;
+  svmUseNativeSOL?: boolean;
+  expireTime?: string;
+  durationSeconds?: number;
 }
 
 export interface QuoteLeg {
@@ -66,6 +74,7 @@ export interface SvmInstruction {
 }
 
 export interface QuoteSvmActions {
+  ataSetupIxs: SvmInstruction[] | null;
   delegateIx: SvmInstruction | null;
   sponsoredDelegateTx: string | null; // base64 VersionedTransaction
   orderMessage: string | null;
@@ -82,6 +91,7 @@ export interface QuoteWrapAction {
 
 export interface QuoteResponse {
   quoteId: string;
+  bridgeQuoteId?: string | null;
   orderType: OrderType;
   side: OrderSide;
   targetAsset: string;
@@ -89,14 +99,17 @@ export interface QuoteResponse {
   from: QuoteLeg;
   to: QuoteLeg;
   fees: QuoteFees;
+  estimatedPriceImpact: string | null;
   wrap: QuoteWrapAction | null;
   evm: QuoteEvmActions | null;
   svm: QuoteSvmActions | null;
 }
 
-export interface SubmitOrderRequest extends QuoteRequest {
+export interface SubmitOrderRequest extends OrderTradeFields {
   funderAddress: string;
   quoteId?: string;
+  bridgeQuoteId?: string;
+  erc8021AttributionCode?: string;
   userSignature: string;
   evmOrderTypedData?: string;
   evmPermitTypedData?: string;

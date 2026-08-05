@@ -3,13 +3,14 @@
 
 import { getChain } from "./chains.js";
 import { FlashClient } from "./flashClient.js";
-import type { EvmWrapDirective } from "./native.js";
 import { evmAddressFromPrivateKey, EvmSigner } from "./signing/evm.js";
 import { svmAddressFromSecret, SvmSigner } from "./signing/svm.js";
 import {
   TERMINAL_STATUSES,
   type FlashGetOrderResponse,
   type FlashOrder,
+  type OrderTradeFields,
+  type OrderType,
   type QuoteRequest,
   type QuoteResponse,
   type SubmitOrderRequest,
@@ -22,15 +23,27 @@ export interface PlaceOrderInput extends QuoteRequest {
   waitForFill?: boolean;
   /** Max seconds to poll before returning the last-seen status. */
   pollTimeoutSec?: number;
-  /**
-   * Set when the spent asset is native on an EVM chain: the flow wraps the native
-   * gas asset into wrapped-native before quoting (Flash's EVM path never wraps).
-   */
-  evmWrap?: EvmWrapDirective;
+  /** Optional ERC-8021 builder attribution included only in the final submit. */
+  erc8021AttributionCode?: string;
 }
 
 export interface PlaceOrderResult {
   quote: QuoteResponse;
+  orderId: string;
+  steps: string[];
+  finalOrder?: FlashGetOrderResponse;
+}
+
+export interface SubmitSignedOrderOptions {
+  /** Poll until a market order reaches a terminal status. */
+  waitForFill?: boolean;
+  /** Max seconds to poll before returning the last-seen status. */
+  pollTimeoutSec?: number;
+  /** Reuse an existing progress log, such as the quote/signing steps. */
+  steps?: string[];
+}
+
+export interface SubmitSignedOrderResult {
   orderId: string;
   steps: string[];
   finalOrder?: FlashGetOrderResponse;
@@ -58,15 +71,56 @@ export async function placeOrder(client: FlashClient, input: PlaceOrderInput): P
   const steps: string[] = [];
 
   // The funder address must be present on the quote for it to return signing payloads.
-  const { privateKey, rpcUrl, waitForFill, pollTimeoutSec, evmWrap, ...quoteFields } = input;
+  const {
+    privateKey,
+    rpcUrl,
+    waitForFill,
+    pollTimeoutSec,
+    erc8021AttributionCode,
+    ...quoteFields
+  } = input;
 
   const funder =
     chain.kind === "evm" ? evmAddressFromPrivateKey(privateKey) : svmAddressFromSecret(privateKey);
   return withWalletLock(`${chain.id}:${funder}`, () =>
     chain.kind === "evm"
-      ? placeEvmOrder(client, quoteFields, privateKey, rpcUrl, waitForFill, pollTimeoutSec, evmWrap, steps)
-      : placeSvmOrder(client, quoteFields, privateKey, rpcUrl, waitForFill, pollTimeoutSec, steps),
+      ? placeEvmOrder(
+          client,
+          quoteFields,
+          privateKey,
+          rpcUrl,
+          waitForFill,
+          pollTimeoutSec,
+          erc8021AttributionCode,
+          steps,
+        )
+      : placeSvmOrder(
+          client,
+          quoteFields,
+          privateKey,
+          rpcUrl,
+          waitForFill,
+          pollTimeoutSec,
+          erc8021AttributionCode,
+          steps,
+        ),
   );
+}
+
+function orderTradeFieldsFromQuote(req: QuoteRequest, quote: QuoteResponse): OrderTradeFields {
+  const {
+    funderAddress: _funderAddress,
+    evmUsePermit2: _evmUsePermit2,
+    svmUseNativeSOL: _svmUseNativeSOL,
+    expireTime: _expireTime,
+    durationSeconds: _durationSeconds,
+    ...tradeFields
+  } = req;
+  return {
+    ...tradeFields,
+    targetAsset: quote.targetAsset,
+    contraAsset: quote.contraAsset,
+  };
 }
 
 async function placeEvmOrder(
@@ -76,25 +130,11 @@ async function placeEvmOrder(
   rpcUrl: string | undefined,
   waitForFill: boolean | undefined,
   pollTimeoutSec: number | undefined,
-  evmWrap: EvmWrapDirective | undefined,
+  erc8021AttributionCode: string | undefined,
   steps: string[],
 ): Promise<PlaceOrderResult> {
   const signer = new EvmSigner(privateKey, quoteFields.targetChain, rpcUrl);
   const req: QuoteRequest = { ...quoteFields, funderAddress: signer.address };
-
-  // 0. Wrap native gas into wrapped-native BEFORE quoting. Flash's EVM quote
-  // path treats the spent token as a plain ERC-20 and its balance check would
-  // reject a wallet holding native but no wrapped-native — so the wrap has to
-  // land first, and the subsequent quote then prices/approves against the WETH
-  // the wallet now holds.
-  if (evmWrap) {
-    const wrapped = await signer.wrapNative(evmWrap.wrapped.address, evmWrap.amount);
-    if (wrapped) {
-      steps.push(`Wrapped ${evmWrap.amount} native → ${evmWrap.wrapped.symbol} (tx ${wrapped.hash})`);
-    } else {
-      steps.push(`Already holding enough ${evmWrap.wrapped.symbol}; no wrap needed`);
-    }
-  }
 
   const quote = await client.quote(req);
   steps.push(`Quoted ${quote.quoteId}: spend ${quote.from.amount} → receive ${quote.to.amount}`);
@@ -102,8 +142,7 @@ async function placeEvmOrder(
   const evm = quote.evm;
   if (!evm) throw new Error("Quote returned no EVM signing payload for an EVM chain.");
 
-  // 1. Wrap native gas asset, if the quote itself priced against wrapped-native
-  // (Flash does this for SVM; on EVM the pre-quote wrap above handles it).
+  // 1. Wrap native gas asset using the exact transaction returned by this quote.
   if (quote.wrap?.evmTx) {
     const { hash } = await signer.sendAndWait(quote.wrap.evmTx, "wrap");
     steps.push(`Wrapped native asset (tx ${hash})`);
@@ -129,20 +168,23 @@ async function placeEvmOrder(
 
   // 5. Submit.
   const submit: SubmitOrderRequest = {
-    ...req,
+    ...orderTradeFieldsFromQuote(req, quote),
     funderAddress: signer.address,
     quoteId: quote.quoteId,
+    ...(quote.bridgeQuoteId != null ? { bridgeQuoteId: quote.bridgeQuoteId } : {}),
+    ...(erc8021AttributionCode !== undefined ? { erc8021AttributionCode } : {}),
     userSignature,
     evmOrderTypedData: evm.orderTypedData,
     ...(evm.permitTypedData && evmPermitSignature
       ? { evmPermitTypedData: evm.permitTypedData, evmPermitSignature }
       : {}),
   };
-  const orderId = await submitOrderReconciled(client, submit, signer.address, steps);
-  steps.push(`Submitted order ${orderId}`);
-
-  const finalOrder = await maybePoll(client, orderId, quote, waitForFill, pollTimeoutSec, steps);
-  return { quote, orderId, steps, finalOrder };
+  const submitted = await submitSignedOrder(client, submit, {
+    waitForFill,
+    pollTimeoutSec,
+    steps,
+  });
+  return { quote, ...submitted };
 }
 
 async function placeSvmOrder(
@@ -152,6 +194,7 @@ async function placeSvmOrder(
   rpcUrl: string | undefined,
   waitForFill: boolean | undefined,
   pollTimeoutSec: number | undefined,
+  erc8021AttributionCode: string | undefined,
   steps: string[],
 ): Promise<PlaceOrderResult> {
   const signer = new SvmSigner(privateKey, rpcUrl);
@@ -163,13 +206,19 @@ async function placeSvmOrder(
   const svm = quote.svm;
   if (!svm) throw new Error("Quote returned no SVM signing payload for Solana.");
 
-  // 1. Wrap native SOL, if requested via svmUseNativeSOL.
+  // 1. Create any missing token accounts before wrap/delegate actions.
+  if (svm.ataSetupIxs?.length) {
+    const { signature } = await signer.sendInstructions(svm.ataSetupIxs, "set up token accounts");
+    steps.push(`Set up token accounts (tx ${signature})`);
+  }
+
+  // 2. Wrap native SOL, if requested via svmUseNativeSOL.
   if (quote.wrap?.svmInstructions?.length) {
     const { signature } = await signer.sendInstructions(quote.wrap.svmInstructions, "wrap SOL");
     steps.push(`Wrapped SOL (tx ${signature})`);
   }
 
-  // 2. Delegate authority — prefer the sponsored tx when offered.
+  // 3. Delegate authority — prefer the sponsored tx when offered.
   let svmSponsoredDelegateTx: string | undefined;
   if (svm.sponsoredDelegateTx) {
     svmSponsoredDelegateTx = await signer.signSponsoredTxBase64(svm.sponsoredDelegateTx);
@@ -179,26 +228,49 @@ async function placeSvmOrder(
     steps.push(`Granted delegate authority (tx ${signature})`);
   }
 
-  // 3. Order signature over the UTF-8 orderMessage.
+  // 4. Order signature over the UTF-8 orderMessage.
   if (!svm.orderMessage) throw new Error("Quote returned no orderMessage to sign.");
   const userSignature = signer.signMessageBase58(svm.orderMessage);
   steps.push("Signed order message");
 
-  // 4. Submit.
+  // 5. Submit.
   const submit: SubmitOrderRequest = {
-    ...req,
+    ...orderTradeFieldsFromQuote(req, quote),
     funderAddress: signer.address,
     quoteId: quote.quoteId,
+    ...(quote.bridgeQuoteId != null ? { bridgeQuoteId: quote.bridgeQuoteId } : {}),
+    ...(erc8021AttributionCode !== undefined ? { erc8021AttributionCode } : {}),
     userSignature,
-    ...(svm.nonce ? { svmNonce: svm.nonce } : {}),
-    ...(svm.deadline ? { svmDeadline: svm.deadline } : {}),
+    ...(svm.nonce !== null ? { svmNonce: svm.nonce } : {}),
+    ...(svm.deadline !== null ? { svmDeadline: svm.deadline } : {}),
     ...(svmSponsoredDelegateTx ? { svmSponsoredDelegateTx } : {}),
   };
-  const orderId = await submitOrderReconciled(client, submit, signer.address, steps);
+  const submitted = await submitSignedOrder(client, submit, {
+    waitForFill,
+    pollTimeoutSec,
+    steps,
+  });
+  return { quote, ...submitted };
+}
+
+export async function submitSignedOrder(
+  client: FlashClient,
+  submit: SubmitOrderRequest,
+  options: SubmitSignedOrderOptions = {},
+): Promise<SubmitSignedOrderResult> {
+  const steps = options.steps ?? [];
+  const orderId = await submitOrderReconciled(client, submit, submit.funderAddress, steps);
   steps.push(`Submitted order ${orderId}`);
 
-  const finalOrder = await maybePoll(client, orderId, quote, waitForFill, pollTimeoutSec, steps);
-  return { quote, orderId, steps, finalOrder };
+  const finalOrder = await maybePoll(
+    client,
+    orderId,
+    submit.orderType,
+    options.waitForFill,
+    options.pollTimeoutSec,
+    steps,
+  );
+  return { orderId, steps, finalOrder };
 }
 
 // The Flash `/order` endpoint can create — and even fill — an order and STILL
@@ -295,14 +367,14 @@ async function findCreatedOrder(
 async function maybePoll(
   client: FlashClient,
   orderId: string,
-  quote: QuoteResponse,
+  orderType: OrderType,
   waitForFill: boolean | undefined,
   pollTimeoutSec: number | undefined,
   steps: string[],
 ): Promise<FlashGetOrderResponse | undefined> {
   // Only market orders fill promptly; resting orders (limit/twap/trigger) would
   // poll forever, so we never auto-poll those even if asked.
-  if (!waitForFill || quote.orderType !== "market") return undefined;
+  if (!waitForFill || orderType !== "market") return undefined;
 
   const deadline = Date.now() + (pollTimeoutSec ?? 120) * 1000;
   let last: FlashGetOrderResponse | undefined;

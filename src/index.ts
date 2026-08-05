@@ -21,39 +21,46 @@ import {
 import { credentialSource, getCredential, maskSecret, setCredential } from "./credentials.js";
 import { FlashApiError } from "./flashClient.js";
 import { orderDetail, orderLine, quoteSummary, result } from "./format.js";
-import { cancelOrder, placeOrder } from "./orderFlow.js";
+import { cancelOrder, placeOrder, submitSignedOrder } from "./orderFlow.js";
 import { resolveNativeAssets } from "./native.js";
 import { MCP_SETUP_URL, runCli } from "./cli.js";
-import type { FlashOrderStatus, OrderSide, OrderType, PriceTrigger } from "./types.js";
+import { buildSignedOrderRequest } from "./signedOrder.js";
+import type {
+  FlashOrderStatus,
+  OrderSide,
+  OrderTradeFields,
+  OrderType,
+  PriceTrigger,
+  QuoteRequest,
+} from "./types.js";
 
 // The interactive out-of-band wizard users run in their own terminal. Handles
 // API key, funder wallets, and RPCs; secrets never pass through the chat.
 const WIZARD_CMD = "npx -y @definitive-fi/flash-mcp setup";
 
-// ----- shared zod fragments for trade params -----
+// ----- live /quote and /order zod fragments -----
 const chainEnum = z.enum(CHAIN_IDS as [string, ...string[]]);
 const sideEnum = z.enum(["buy", "sell"]);
 const orderTypeEnum = z.enum(["market", "limit", "twap", "stop", "stop-loss", "take-profit", "bracket"]);
-const triggerSchema = z.object({
-  notionalPrice: z.string().describe("USD trigger price on the target asset"),
-  triggerType: z.enum(["upper", "lower"]),
-});
+const triggerSchema = z
+  .object({
+    notionalPrice: z.string().min(1).optional().describe("USD trigger price on the target asset"),
+    crossPrice: z.string().min(1).optional().describe("Target/contra pair-rate trigger price"),
+    triggerType: z.enum(["upper", "lower"]),
+  })
+  .refine((t) => (t.notionalPrice !== undefined) !== (t.crossPrice !== undefined), {
+    message: "Exactly one of notionalPrice or crossPrice is required",
+  });
+const attributionSchema = z
+  .string()
+  .regex(/^[a-zA-Z0-9_.-]{1,32}$/)
+  .describe("ERC-8021 builder code (1-32 letters, numbers, underscores, periods, or hyphens)");
 
-const tradeShape = {
+const orderTradeShape = {
   targetChain: chainEnum.describe("Chain of the target (traded) asset"),
   contraChain: chainEnum.describe("Chain of the contra asset (usually same as targetChain)"),
-  targetAsset: z
-    .string()
-    .describe(
-      "Address of the target (traded) asset. A native gas asset (its symbol like \"ETH\", \"native\", the " +
-        "zero address, or the 0xEeee… sentinel) is auto-routed through the chain's wrapped-native token.",
-    ),
-  contraAsset: z
-    .string()
-    .describe(
-      "Address of the contra asset — spent on buys, received on sells. Native gas assets are auto-wrapped " +
-        "like targetAsset (the spent side is wrapped before the trade).",
-    ),
+  targetAsset: z.string().min(1).describe("Exact normalized address of the target (traded) asset"),
+  contraAsset: z.string().min(1).describe("Exact normalized address of the contra asset"),
   side: sideEnum,
   qty: z
     .string()
@@ -62,16 +69,40 @@ const tradeShape = {
   maxSlippage: z.string().optional().describe("Slippage tolerance as a decimal, e.g. 0.01 = 1% (default 0.05)"),
   maxPriceImpact: z.string().optional().describe("Max price impact as a decimal (default 0.05)"),
   limitNotionalPrice: z.string().optional().describe("USD limit price; required for limit orders"),
+  limitCrossPrice: z.string().optional().describe("Target/contra pair-rate limit price"),
+  recipientAddress: z.string().optional().describe("Destination recipient; required for cross-chain trades"),
   quickTrade: z.boolean().optional().describe("Market-only QuickTrade mode"),
-  svmUseNativeSOL: z.boolean().optional().describe("Solana: treat spent wSOL as native SOL and wrap it"),
   flashIntegratorFeeBps: z.string().optional().describe("Integrator fee in bps (max 1000 = 10%)"),
-  expireTime: z.string().optional().describe("ISO-8601 expiry for limit/trigger orders (omit for GTC)"),
-  durationSeconds: z.number().int().optional().describe("TWAP only: total duration, min 300"),
-  twapBucketCount: z.number().int().optional().describe("TWAP only: number of equal-time buckets"),
+  startTime: z.string().optional().describe("TWAP only: ISO-8601 scheduled execution start"),
+  twapBucketCount: z.number().int().min(2).max(2560).optional().describe("TWAP bucket count"),
   triggers: z.array(triggerSchema).max(2).optional().describe("Price triggers for stop/take-profit/bracket"),
 };
 
-function tradeRequestFromArgs(a: Record<string, unknown>) {
+const quoteOnlyShape = {
+  evmUsePermit2: z.boolean().optional().describe("EVM quote only: force the Permit2 signing flow"),
+  svmUseNativeSOL: z.boolean().optional().describe("Solana quote only: treat spent wSOL as native SOL"),
+  expireTime: z.string().optional().describe("Quote only: ISO-8601 expiry for limit/trigger orders"),
+  durationSeconds: z.number().int().min(300).optional().describe("Quote only: TWAP duration in seconds"),
+};
+
+const quoteTradeShape = {
+  ...orderTradeShape,
+  targetAsset: z
+    .string()
+    .min(1)
+    .describe(
+      "Target asset address. Native aliases are normalized for quoting and preparation actions.",
+    ),
+  contraAsset: z
+    .string()
+    .min(1)
+    .describe(
+      "Contra asset address. Native aliases are normalized for quoting and preparation actions.",
+    ),
+  ...quoteOnlyShape,
+};
+
+function orderTradeFieldsFromArgs(a: Record<string, unknown>): OrderTradeFields {
   return {
     targetChain: a.targetChain as string,
     contraChain: a.contraChain as string,
@@ -80,16 +111,28 @@ function tradeRequestFromArgs(a: Record<string, unknown>) {
     side: a.side as OrderSide,
     qty: a.qty as string,
     orderType: (a.orderType as OrderType) ?? "market",
-    ...(a.maxSlippage ? { maxSlippage: a.maxSlippage as string } : {}),
-    ...(a.maxPriceImpact ? { maxPriceImpact: a.maxPriceImpact as string } : {}),
-    ...(a.limitNotionalPrice ? { limitNotionalPrice: a.limitNotionalPrice as string } : {}),
+    ...(a.maxSlippage !== undefined ? { maxSlippage: a.maxSlippage as string } : {}),
+    ...(a.maxPriceImpact !== undefined ? { maxPriceImpact: a.maxPriceImpact as string } : {}),
+    ...(a.limitNotionalPrice !== undefined ? { limitNotionalPrice: a.limitNotionalPrice as string } : {}),
+    ...(a.limitCrossPrice !== undefined ? { limitCrossPrice: a.limitCrossPrice as string } : {}),
+    ...(a.recipientAddress !== undefined ? { recipientAddress: a.recipientAddress as string } : {}),
     ...(a.quickTrade !== undefined ? { quickTrade: a.quickTrade as boolean } : {}),
+    ...(a.flashIntegratorFeeBps !== undefined
+      ? { flashIntegratorFeeBps: a.flashIntegratorFeeBps as string }
+      : {}),
+    ...(a.startTime !== undefined ? { startTime: a.startTime as string } : {}),
+    ...(a.twapBucketCount !== undefined ? { twapBucketCount: a.twapBucketCount as number } : {}),
+    ...(a.triggers !== undefined ? { triggers: a.triggers as PriceTrigger[] } : {}),
+  };
+}
+
+function quoteRequestFromArgs(a: Record<string, unknown>): QuoteRequest {
+  return {
+    ...orderTradeFieldsFromArgs(a),
+    ...(a.evmUsePermit2 !== undefined ? { evmUsePermit2: a.evmUsePermit2 as boolean } : {}),
     ...(a.svmUseNativeSOL !== undefined ? { svmUseNativeSOL: a.svmUseNativeSOL as boolean } : {}),
-    ...(a.flashIntegratorFeeBps ? { flashIntegratorFeeBps: a.flashIntegratorFeeBps as string } : {}),
-    ...(a.expireTime ? { expireTime: a.expireTime as string } : {}),
-    ...(a.durationSeconds ? { durationSeconds: a.durationSeconds as number } : {}),
-    ...(a.twapBucketCount ? { twapBucketCount: a.twapBucketCount as number } : {}),
-    ...(a.triggers ? { triggers: a.triggers as PriceTrigger[] } : {}),
+    ...(a.expireTime !== undefined ? { expireTime: a.expireTime as string } : {}),
+    ...(a.durationSeconds !== undefined ? { durationSeconds: a.durationSeconds as number } : {}),
   };
 }
 
@@ -107,6 +150,12 @@ interface ToolAnnotations {
   openWorldHint?: boolean;
 }
 
+interface ToolResult {
+  content: { type: "text"; text: string }[];
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+}
+
 /** Register a tool whose handler errors are turned into friendly, non-crashing results. */
 function registerTool(
   name: string,
@@ -114,9 +163,10 @@ function registerTool(
     title: string;
     description: string;
     inputSchema: Record<string, z.ZodTypeAny>;
+    outputSchema?: Record<string, z.ZodTypeAny>;
     annotations: ToolAnnotations;
   },
-  fn: (args: any) => Promise<{ content: { type: "text"; text: string }[] }>,
+  fn: (args: any) => Promise<ToolResult>,
 ) {
   (server.registerTool as any)(name, def, async (args: any) => {
     try {
@@ -195,9 +245,15 @@ registerTool(
 
     lines.push(
       "**Current configuration**",
-      apiSource === "none" ? "- API key: ❌ not set" : `- API key: ✅ configured (source: ${apiSource})`,
-      evmAddr ? `- EVM funder wallet: ✅ ${evmAddr}` : "- EVM funder wallet: not set (needed to trade on EVM chains)",
-      svmAddr ? `- Solana funder wallet: ✅ ${svmAddr}` : "- Solana funder wallet: not set (needed to trade on Solana)",
+      apiSource === "none"
+        ? "- API key: not configured (using the embedded/default credential)"
+        : `- API key: ✅ configured (source: ${apiSource})`,
+      evmAddr
+        ? `- EVM funder wallet: ✅ ${evmAddr}`
+        : "- EVM funder wallet: not set (external signing remains available)",
+      svmAddr
+        ? `- Solana funder wallet: ✅ ${svmAddr}`
+        : "- Solana funder wallet: not set (external signing remains available)",
       rpcChains.length
         ? `- Custom RPC: ✅ ${rpcChains.join(", ")}`
         : "- Custom RPC: none (using public defaults, which are rate-limited)",
@@ -209,7 +265,8 @@ registerTool(
 
     if (needsKey || needsWallet) {
       lines.push(
-        "**To finish setup, run the interactive wizard in your own terminal** (not through this chat):",
+        "**To configure a personal API key or local signing, run the interactive wizard in your own terminal** " +
+          "(not through this chat):",
         "```",
         WIZARD_CMD,
         "```",
@@ -221,8 +278,8 @@ registerTool(
       if (needsKey) {
         lines.push(
           "",
-          "_Prefer to stay in chat?_ The API key alone enables quoting and is safe to paste here (it",
-          `cannot move funds): open ${MCP_SETUP_URL} , log in, click **Generate API Key**, then`,
+          "_Prefer to stay in chat?_ A personal API key is optional; without one, the embedded/default",
+          `credential is used. To configure yours, open ${MCP_SETUP_URL} , log in, click **Generate API Key**, then`,
           "**Copy & Close**, and paste the `dpka_…` key into the conversation. Funder wallets, however,",
           "can **only** be added from your own terminal — never paste a wallet private key into chat.",
         );
@@ -255,9 +312,15 @@ registerTool(
     const svmAddr = await funderAddressFor("solana");
     const lines = [
       "**Definitive Flash MCP status**",
-      apiKey ? `- API key: ${maskSecret(apiKey)} (source: ${apiSource})` : "- API key: ❌ not set — run `flash_setup`",
-      evmAddr ? `- EVM funder wallet: ${evmAddr}` : "- EVM funder wallet: ❌ not set",
-      svmAddr ? `- Solana funder wallet: ${svmAddr}` : "- Solana funder wallet: ❌ not set",
+      apiKey
+        ? `- API key: ${maskSecret(apiKey)} (source: ${apiSource})`
+        : "- API key: not configured (using the embedded/default credential)",
+      evmAddr
+        ? `- EVM funder wallet: ${evmAddr}`
+        : "- EVM funder wallet: not set (external signing remains available)",
+      svmAddr
+        ? `- Solana funder wallet: ${svmAddr}`
+        : "- Solana funder wallet: not set (external signing remains available)",
     ];
     const rpcCfg = getConfig().rpc ?? {};
     const rpcChains = Object.keys(rpcCfg);
@@ -274,6 +337,12 @@ registerTool(
 // ---------------------------------------------------------------------------
 // flash_quote — read-only price discovery
 // ---------------------------------------------------------------------------
+const quoteOutputSchema = {
+  // Quote payloads gain preparation/signing fields over time. Validate that the
+  // raw quote is an object while preserving every current and future field.
+  quote: z.object({}).passthrough(),
+};
+
 registerTool(
   "flash_quote",
   {
@@ -282,20 +351,30 @@ registerTool(
       "Price a trade across 200+ liquidity sources without executing. Returns the spend/receive amounts " +
       "and estimated fees. Does not require a wallet.",
     annotations: { readOnlyHint: true, openWorldHint: true },
-    inputSchema: tradeShape,
+    inputSchema: {
+      ...quoteTradeShape,
+      funderAddress: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Funder address to include so the quote returns externally signable preparation payloads"),
+    },
+    outputSchema: quoteOutputSchema,
   },
   async (args) => {
     const { client } = await resolveClient();
-    // Native gas assets (ETH, the zero/0xEeee sentinels, "native") aren't
-    // tradable on Flash — rewrite them to the chain's wrapped-native token so
-    // the quote succeeds, and surface what was substituted.
-    const { req, notes } = resolveNativeAssets(tradeRequestFromArgs(args));
-    const funder = await funderAddressFor(req.targetChain);
+    // Normalize native intent before quoting so Flash returns the exact wrap
+    // preparation action and normalized asset addresses.
+    const { req, notes } = resolveNativeAssets(quoteRequestFromArgs(args));
+    const funder =
+      args.funderAddress !== undefined
+        ? (args.funderAddress as string)
+        : await funderAddressFor(req.targetChain);
     const quote = await client.quote({ ...req, ...(funder ? { funderAddress: funder } : {}) });
     const summary = notes.length
       ? `${notes.map((n) => `> ℹ️ ${n}`).join("\n")}\n\n${quoteSummary(quote)}`
       : quoteSummary(quote);
-    return result(summary, quote);
+    return { ...result(summary, quote), structuredContent: { quote } };
   },
 );
 
@@ -379,30 +458,35 @@ registerTool(
     description:
       "Execute a trade end to end: fetch a fresh quote, send any required wrap/approve transactions, sign " +
       "the order with your funder wallet, and submit it. For market orders it polls until the order fills " +
-      "(or times out). Requires an API key and the matching funder wallet private key. This spends real funds.",
+      "(or times out). Uses a configured API key or the embedded/default credential, and requires the " +
+      "matching funder wallet private key. This spends real funds.",
     // Spends real funds and cannot be undone once filled — clients should always confirm with the user.
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     inputSchema: {
-      ...tradeShape,
+      ...quoteTradeShape,
+      erc8021AttributionCode: attributionSchema.optional(),
       rpcUrl: z.string().optional().describe("Override the RPC used for on-chain wrap/approve sends"),
       waitForFill: z.boolean().optional().describe("Market orders only: poll until filled (default true)"),
       pollTimeoutSec: z.number().int().optional().describe("Max seconds to poll for a fill (default 120)"),
     },
   },
   async (args) => {
-    const client = await requireClient();
-    // Rewrite native-asset references to the chain's wrapped-native token. When
-    // the spent asset is native on EVM, `evmWrap` tells the order flow to wrap it
-    // client-side before quoting (Flash's EVM path doesn't wrap for us).
-    const { req, notes, evmWrap } = resolveNativeAssets(tradeRequestFromArgs(args));
+    const { client } = await resolveClient();
+    // Normalize native intent before /quote; the flow executes preparation
+    // actions returned by that same quote before signing and submitting it.
+    const { req, notes } = resolveNativeAssets(quoteRequestFromArgs(args));
     const privateKey = await requirePrivateKey(req.targetChain);
     const res = await placeOrder(client, {
       ...req,
       privateKey,
-      ...(args.rpcUrl ? { rpcUrl: args.rpcUrl as string } : {}),
+      ...(args.rpcUrl !== undefined ? { rpcUrl: args.rpcUrl as string } : {}),
       waitForFill: (args.waitForFill as boolean | undefined) ?? true,
-      ...(args.pollTimeoutSec ? { pollTimeoutSec: args.pollTimeoutSec as number } : {}),
-      ...(evmWrap ? { evmWrap } : {}),
+      ...(args.pollTimeoutSec !== undefined
+        ? { pollTimeoutSec: args.pollTimeoutSec as number }
+        : {}),
+      ...(args.erc8021AttributionCode !== undefined
+        ? { erc8021AttributionCode: args.erc8021AttributionCode as string }
+        : {}),
     });
 
     const lines = [
@@ -417,6 +501,92 @@ registerTool(
       lines.push("", `Track it with \`flash_get_order { orderId: "${res.orderId}" }\`.`);
     }
     return result(lines.join("\n"), { orderId: res.orderId, quote: res.quote, finalOrder: res.finalOrder });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// flash_submit_signed_order — submit an order signed outside this MCP server
+// ---------------------------------------------------------------------------
+registerTool(
+  "flash_submit_signed_order",
+  {
+    title: "Submit an externally signed Flash order",
+    description:
+      "Submit a Flash order that was prepared and signed externally. Pass the normalized trade fields, " +
+      "quote id, funder address, signature, and chain-specific payloads returned by flash_quote. This " +
+      "tool never accepts or reads a wallet private key. This spends real funds.",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    inputSchema: {
+      ...orderTradeShape,
+      funderAddress: z.string().min(1).describe("Address of the wallet that signed the order"),
+      quoteId: z.string().min(1).describe("Quote id returned by flash_quote"),
+      bridgeQuoteId: z.string().min(1).optional().describe("Cross-chain bridge quote id"),
+      erc8021AttributionCode: attributionSchema.optional(),
+      userSignature: z.string().min(1).describe("Externally produced order signature"),
+      evmOrderTypedData: z.string().optional().describe("EVM order typed data returned by the quote"),
+      evmPermitTypedData: z.string().optional().describe("Permit2 typed data returned by the quote"),
+      evmPermitSignature: z.string().optional().describe("Signature of evmPermitTypedData"),
+      svmNonce: z.string().optional().describe("Solana nonce returned by the quote"),
+      svmDeadline: z.string().optional().describe("Solana deadline returned by the quote"),
+      svmSponsoredDelegateTx: z
+        .string()
+        .optional()
+        .describe("Externally co-signed sponsored Solana delegate transaction"),
+      waitForFill: z.boolean().optional().describe("Market orders only: poll until filled (default true)"),
+      pollTimeoutSec: z.number().int().optional().describe("Max seconds to poll for a fill (default 120)"),
+    },
+  },
+  async (args) => {
+    const { client } = await resolveClient();
+    // Externally signed fields must echo the exact normalized assets returned by
+    // the quote. Do not reinterpret native aliases after they have been signed.
+    const tradeFields = orderTradeFieldsFromArgs(args);
+    const submit = buildSignedOrderRequest(tradeFields, {
+      funderAddress: args.funderAddress as string,
+      quoteId: args.quoteId as string,
+      ...(args.bridgeQuoteId !== undefined
+        ? { bridgeQuoteId: args.bridgeQuoteId as string }
+        : {}),
+      ...(args.erc8021AttributionCode !== undefined
+        ? { erc8021AttributionCode: args.erc8021AttributionCode as string }
+        : {}),
+      userSignature: args.userSignature as string,
+      ...(args.evmOrderTypedData !== undefined
+        ? { evmOrderTypedData: args.evmOrderTypedData as string }
+        : {}),
+      ...(args.evmPermitTypedData !== undefined
+        ? { evmPermitTypedData: args.evmPermitTypedData as string }
+        : {}),
+      ...(args.evmPermitSignature !== undefined
+        ? { evmPermitSignature: args.evmPermitSignature as string }
+        : {}),
+      ...(args.svmNonce !== undefined ? { svmNonce: args.svmNonce as string } : {}),
+      ...(args.svmDeadline !== undefined ? { svmDeadline: args.svmDeadline as string } : {}),
+      ...(args.svmSponsoredDelegateTx !== undefined
+        ? { svmSponsoredDelegateTx: args.svmSponsoredDelegateTx as string }
+        : {}),
+    });
+    const res = await submitSignedOrder(client, submit, {
+      waitForFill: (args.waitForFill as boolean | undefined) ?? true,
+      ...(args.pollTimeoutSec !== undefined
+        ? { pollTimeoutSec: args.pollTimeoutSec as number }
+        : {}),
+    });
+
+    const lines = [
+      `**Order submitted: \`${res.orderId}\`**`,
+      "",
+      ...res.steps.map((s) => `- ${s}`),
+    ];
+    if (res.finalOrder) {
+      lines.push("", orderDetail(res.finalOrder));
+    } else {
+      lines.push("", `Track it with \`flash_get_order { orderId: "${res.orderId}" }\`.`);
+    }
+    return result(lines.join("\n"), {
+      orderId: res.orderId,
+      ...(res.finalOrder ? { finalOrder: res.finalOrder } : {}),
+    });
   },
 );
 
