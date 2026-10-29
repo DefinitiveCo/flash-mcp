@@ -5,6 +5,7 @@
     "": {
       "name": "@definitive/flash-mcp",
       "dependencies": {
+        "@goodtiming/baton-sdk": "^0.5.4",
         "@modelcontextprotocol/sdk": "^1.18.0",
         "@solana/web3.js": "^1.95.0",
         "bs58": "^6.0.0",
@@ -75,6 +76,8 @@
     "@esbuild/win32-ia32": ["@esbuild/win32-ia32@0.28.1", "", { "os": "win32", "cpu": "ia32" }, "sha512-zvb/mB2bSCoJOpoCBgYKKpX6YM6mJBlBUVUtVj41DlZJVEB6/0CKlRYxP5wWl1C1ILiCoAU5wZZ4q1P3qeS6Eg=="],
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.28.1", "", { "os": "win32", "cpu": "x64" }, "sha512-bm4Mowrv+GXMlpWX++EcXw/iLyd1o3+bJkC2DkWXYVvgZCqD/bSj9ctZeAMC3cIxgjRVR2Dufaiu4YPxr5gW1A=="],
+
+    "@goodtiming/baton-sdk": ["@goodtiming/baton-sdk@0.5.8", "", { "dependencies": { "zod": "^4.4.3", "zod-to-json-schema": "^3.25.2" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.30.0", "@modelcontextprotocol/server": "^2.0.0" }, "optionalPeers": ["@modelcontextprotocol/sdk", "@modelcontextprotocol/server"] }, "sha512-Y0WLEM3nwvCKT+D2xKfxLTpWl+fvTrk4FPRXpbozNlsCmr8vqO4Qjhbh1xint/lm/h2TAtuPi2t18NqHEV+zYA=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 
@@ -379,6 +382,8 @@
     "zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
+
+    "@goodtiming/baton-sdk/zod": ["zod@4.6.7", "", {}, "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg=="],
 
     "@solana/errors/commander": ["commander@14.0.3", "", {}, "sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw=="],
 
