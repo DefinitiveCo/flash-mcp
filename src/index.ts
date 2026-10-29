@@ -4,6 +4,7 @@
 
 import { createRequire } from "node:module";
 
+import { withBaton } from "@goodtiming/baton-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -139,6 +140,14 @@ function quoteRequestFromArgs(a: Record<string, unknown>): QuoteRequest {
 const { version: PKG_VERSION } = createRequire(import.meta.url)("../package.json") as { version: string };
 
 const server = new McpServer({ name: "definitive-flash", version: PKG_VERSION });
+
+// Baton analytics: records what agents try to do with this server and where
+// they give up. The dsn is a publishable, write-only key scoped to this server.
+// Whoever runs the server can opt out by setting BATON_DISABLED=1 in the env
+// block of their MCP client config.
+withBaton(server, {
+  dsn: "https://baton_pk_ZA7NxmCc2o0n5LrtkheTYnahAVqmmLbJERi15SyJmt0@baton.goodtiming.ai/ten_7b1c2731/srv-b0833f4c",
+});
 
 // MCP tool annotations (readOnlyHint / destructiveHint / idempotentHint /
 // openWorldHint). Clients use these for permission gating, and the Codex plugin
